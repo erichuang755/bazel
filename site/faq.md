@@ -159,10 +159,9 @@ Yes. For a simple example, see:
 
   <https://github.com/bazelbuild/bazel/blob/master/examples/cpp/BUILD>
 
-The Bazel source code itself provides more complex examples:
+The Bazel source code itself provides a more complex example:
 
-  <https://github.com/bazelbuild/bazel/blob/master/src/main/java/BUILD>\\
-  <https://github.com/bazelbuild/bazel/blob/master/src/test/java/BUILD>
+  <https://github.com/bazelbuild/bazel/blob/master/src/BUILD>
 
 What is Bazel best at?
 ----------------------
@@ -313,7 +312,9 @@ will need to take some extra care:
 Do you have binary releases?
 ----------------------------
 
-Not yet, but we are actively working on this. Stay tuned.
+Yes, you can find the latest release binaries
+[here](https://github.com/bazelbuild/bazel/releases/latest). Our release
+policy is documented [here](http://bazel.io/support.html).
 
 I use Eclipse/IntelliJ. How does Bazel interoperate with IDEs?
 --------------------------------------------------------------
@@ -360,8 +361,8 @@ files for python:
   <https://github.com/bazelbuild/bazel/blob/master/tools/build_rules/py_rules.bzl>\\
   <https://github.com/bazelbuild/bazel/tree/master/examples/py>
 
-We are working on opening up a subset of our internal Python rules, so
-they can be used as helper scripts as part of a build.
+We have opened up a subset of our internal Python rules, so they
+can be used as helper scripts as part of a build.
 
 Simplistic support for PEX-style binaries is at
 [here](https://github.com/bazelbuild/bazel/blob/master/tools/build_rules/py_rules.bzl).
@@ -378,20 +379,16 @@ that accomplish this are rather complex due to their interactions with our C++
 libraries, and are incompatible with the conventions of the `go` tool.  We are
 working on improving this situation.
 
-Can I use Bazel for my LISP/Python/Haskell/Scala/Rust project?
---------------------------------------------------------------
+Can I use Bazel for my [INSERT LANGUAGE HERE] project?
+------------------------------------------------------
 
-We have an extension mechanism that allows you to add new rules
+We have an extension mechanism called Skylark that allows you to add new rules
 without recompiling Bazel.
 
-For documentation: see [here](docs/skylark/index.html).
-
-At present, however, the extension mechanism is experimental.
-
-For the following languages, we have experimental rules:
-
-   * [Rust](https://github.com/bazelbuild/bazel/blob/master/tools/build_rules/rust/README.md)
-   * [Closure](https://github.com/bazelbuild/bazel/blob/master/tools/build_rules/closure/README.md)
+For documentation: see [here](/docs/skylark/index.html). We have support for
+several languages that use that extension mechanism, see our
+[build encyclopedia](/docs/be/overview.html) for the full
+list of supported languages.
 
 I need more functionality. Can I add rules that are compiled into Bazel?
 ------------------------------------------------------------------------

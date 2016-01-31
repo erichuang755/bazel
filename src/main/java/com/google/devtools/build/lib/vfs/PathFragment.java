@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,13 +14,13 @@
 package com.google.devtools.build.lib.vfs;
 
 import com.google.common.base.Function;
-import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import com.google.devtools.build.lib.util.OS;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.util.StringCanonicalizer;
 
 import java.io.File;
@@ -43,7 +43,7 @@ import java.util.Set;
  * with advanced features like \\\\network\\paths and \\\\?\\unc\\paths.
  */
 @Immutable @ThreadSafe
-public final class PathFragment implements Comparable<PathFragment>, Serializable {
+public final class  PathFragment implements Comparable<PathFragment>, Serializable {
 
   public static final int INVALID_SEGMENT = -1;
 
@@ -185,8 +185,7 @@ public final class PathFragment implements Comparable<PathFragment>, Serializabl
    * @param offset how many characters from the start of the string to ignore.
    */
   private static String[] segment(String toSegment, int offset) {
-    char[] chars = toSegment.toCharArray();
-    int length = chars.length;
+    int length = toSegment.length();
 
     // Handle "/" and "" quickly.
     if (length == offset) {
@@ -198,7 +197,7 @@ public final class PathFragment implements Comparable<PathFragment>, Serializabl
     int seg = 0;
     int start = offset;
     for (int i = offset; i < length; i++) {
-      if (isSeparator(chars[i])) {
+      if (isSeparator(toSegment.charAt(i))) {
         if (i > start) {  // to skip repeated separators
           seg++;
         }
@@ -212,20 +211,16 @@ public final class PathFragment implements Comparable<PathFragment>, Serializabl
     seg = 0;
     start = offset;
     for (int i = offset; i < length; i++) {
-      if (isSeparator(chars[i])) {
+      if (isSeparator(toSegment.charAt(i))) {
         if (i > start) {  // to skip repeated separators
-          // Make a copy of the String here to allow the interning to save memory. String.substring
-          // does not make a copy, but refers to the original char array, preventing garbage
-          // collection of the parts that are unnecessary.
-          result[seg] = StringCanonicalizer.intern(new String(chars, start,  i - start));
+          result[seg] = StringCanonicalizer.intern(toSegment.substring(start,  i));
           seg++;
         }
         start = i + 1;
       }
     }
     if (start < length) {
-      result[seg] = StringCanonicalizer.intern(new String(chars, start, length - start));
-      seg++;
+      result[seg] = StringCanonicalizer.intern(toSegment.substring(start, length));
     }
     return result;
   }
@@ -384,6 +379,9 @@ public final class PathFragment implements Comparable<PathFragment>, Serializabl
    * with no path normalization or I/O performed.
    */
   public PathFragment getRelative(PathFragment otherFragment) {
+    if (otherFragment == EMPTY_FRAGMENT) {
+      return this;
+    }
     return otherFragment.isAbsolute()
         ? otherFragment
         : new PathFragment(this, otherFragment);

@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@
 // limitations under the License.
 package com.google.devtools.build.lib.standalone;
 
+import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.ExecutionStrategy;
@@ -20,11 +21,13 @@ import com.google.devtools.build.lib.actions.Executor;
 import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.actions.SpawnActionContext;
 import com.google.devtools.build.lib.actions.UserExecException;
+import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
+import com.google.devtools.build.lib.rules.apple.AppleHostInfo;
 import com.google.devtools.build.lib.shell.AbnormalTerminationException;
 import com.google.devtools.build.lib.shell.Command;
 import com.google.devtools.build.lib.shell.CommandException;
 import com.google.devtools.build.lib.shell.TerminationStatus;
-import com.google.devtools.build.lib.syntax.Label;
 import com.google.devtools.build.lib.util.CommandFailureUtils;
 import com.google.devtools.build.lib.util.OS;
 import com.google.devtools.build.lib.util.OsUtils;
@@ -38,13 +41,15 @@ import java.util.List;
 /**
  * Strategy that uses subprocessing to execute a process.
  */
-@ExecutionStrategy(name = { "standalone" }, contextType = SpawnActionContext.class)
+@ExecutionStrategy(name = { "standalone", "local" }, contextType = SpawnActionContext.class)
 public class StandaloneSpawnStrategy implements SpawnActionContext {
   private final boolean verboseFailures;
   private final Path processWrapper;
+  private final Path execRoot;
 
   public StandaloneSpawnStrategy(Path execRoot, boolean verboseFailures) {
     this.verboseFailures = verboseFailures;
+    this.execRoot = execRoot;
     this.processWrapper = execRoot.getRelative(
         "_bin/process-wrapper" + OsUtils.executableExtension());
   }
@@ -94,7 +99,8 @@ public class StandaloneSpawnStrategy implements SpawnActionContext {
     args.addAll(spawn.getArguments());
 
     String cwd = executor.getExecRoot().getPathString();
-    Command cmd = new Command(args.toArray(new String[]{}), spawn.getEnvironment(), new File(cwd));
+    Command cmd = new Command(args.toArray(new String[]{}),
+        locallyDeterminedEnv(spawn.getEnvironment()), new File(cwd));
 
     FileOutErr outErr = actionExecutionContext.getFileOutErr();
     try {
@@ -126,5 +132,47 @@ public class StandaloneSpawnStrategy implements SpawnActionContext {
   @Override
   public boolean isRemotable(String mnemonic, boolean remotable) {
     return false;
+  }
+
+  /**
+   * Adds to the given environment all variables that are dependent on system state of the host
+   * machine.
+   * 
+   * <p> Admittedly, hermeticity is "best effort" in such cases; these environment values
+   * should be as tied to configuration parameters as possible.
+   * 
+   * <p>For example, underlying iOS toolchains require that SDKROOT resolve to an absolute
+   * system path, but, when selecting which SDK to resolve, the version number comes from
+   * build configuration.
+   * 
+   * @return the new environment, comprised of the old environment plus any new variables
+   * @throws UserExecException if any variables dependent on system state could not be
+   *     resolved
+   */
+  private ImmutableMap<String, String> locallyDeterminedEnv(ImmutableMap<String, String> env)
+      throws UserExecException {
+    ImmutableMap.Builder<String, String> newEnvBuilder = ImmutableMap.builder();
+    newEnvBuilder.putAll(env);
+    if (env.containsKey(AppleConfiguration.APPLE_SDK_VERSION_ENV_NAME)) {
+      // The Apple platform is needed to select the appropriate SDK.
+      if (!env.containsKey(AppleConfiguration.APPLE_SDK_PLATFORM_ENV_NAME)) {
+        throw new UserExecException("Could not resolve apple platform for determining SDK");
+      }
+      String iosSdkVersion = env.get(AppleConfiguration.APPLE_SDK_VERSION_ENV_NAME);
+      String appleSdkPlatform = env.get(AppleConfiguration.APPLE_SDK_PLATFORM_ENV_NAME);
+      // TODO(bazel-team): Determine and set DEVELOPER_DIR.
+      addSdkRootEnv(newEnvBuilder, iosSdkVersion, appleSdkPlatform);
+    }
+    return newEnvBuilder.build();
+  }
+
+  private void addSdkRootEnv(
+      ImmutableMap.Builder<String, String> envBuilder, String iosSdkVersion,
+      String appleSdkPlatform) throws UserExecException {
+    // Sanity check, also presents a less cryptic error message.
+    if (OS.getCurrent() != OS.DARWIN) {
+      throw new UserExecException("Cannot locate iOS SDK on non-darwin operating system");
+    }
+    envBuilder.put("SDKROOT", AppleHostInfo.getSdkRoot(execRoot, iosSdkVersion, appleSdkPlatform));
   }
 }

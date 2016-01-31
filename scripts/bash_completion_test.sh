@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Copyright 2015 Google Inc. All rights reserved.
+# Copyright 2015 The Bazel Authors. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -170,8 +170,10 @@ source ${COMPLETION}
 assert_expansion_function() {
   local ws=${PWD}
   local function="$1" displacement="$2" type="$3" expected="$4" current="$5"
-  assert_equals "$(echo -e "${expected}")" \
-      "$(eval "_bazel__${function} \"${ws}\" \"${displacement}\" \"${current}\" \"${type}\"")"
+  disable_errexit
+  local actual_result=$(eval "_bazel__${function} \"${ws}\" \"${displacement}\" \"${current}\" \"${type}\"")
+  enable_errexit
+  assert_equals "$(echo -ne "${expected}")" "${actual_result}"
 }
 
 test_expand_rules_in_package() {

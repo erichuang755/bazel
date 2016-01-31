@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,15 +13,28 @@
 // limitations under the License.
 package com.google.devtools.build.lib.skyframe;
 
+import com.google.common.collect.ImmutableList;
+import com.google.devtools.build.lib.vfs.RootedPath;
 import com.google.devtools.build.skyframe.SkyFunction;
-import com.google.devtools.build.skyframe.SkyValue;
+import com.google.devtools.build.skyframe.SkyKey;
 
-/** A {@link SkyFunction} that has the side effect of reporting a file symlink cycle. */
+
+/**
+ * A {@link SkyFunction} that has the side effect of reporting a file symlink cycle. This is
+ * achieved by forcing the same key for two logically equivalent cycles
+ * (e.g. ['a' -> 'b' -> 'c' -> 'a'] and ['b' -> 'c' -> 'a' -> 'b']), and letting Skyframe do its
+ * magic.
+ */
 public class FileSymlinkCycleUniquenessFunction
-    extends AbstractFileSymlinkExceptionUniquenessFunction {
+    extends AbstractChainUniquenessFunction<RootedPath> {
+
+  static SkyKey key(ImmutableList<RootedPath> cycle) {
+    return ChainUniquenessUtils.key(SkyFunctions.FILE_SYMLINK_CYCLE_UNIQUENESS, cycle);
+  }
+
   @Override
-  protected SkyValue getDummyValue() {
-    return FileSymlinkCycleUniquenessValue.INSTANCE;
+  protected String elementToString(RootedPath elt) {
+    return elt.asPath().toString();
   }
 
   @Override

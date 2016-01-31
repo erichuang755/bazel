@@ -1,5 +1,5 @@
 #!/bin/sh
-# Copyright 2015 Google Inc. All rights reserved.
+# Copyright 2015 The Bazel Authors. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,22 +20,18 @@
 #
 
 set -eu
-TARGET=//src/...
+TARGET=$(echo //src/{main,java_tools,test/{java,cpp}}/... //third_party/... \
+               -//third_party/ijar/test/... -//third_party/java/j2objc/...)
 JRE="JavaSE-1.8"
 PROJECT_NAME="bazel"
 OUTPUT_PATH="bazel-out/ide/classes"
 GENERATED_PATH="bazel-out/ide/generated"
-EXTRA_JARS="bazel-bazel/external/local-jdk/lib/tools.jar"
+EXTRA_JARS="bazel-bazel/external/local_jdk/lib/tools.jar"
 
 cd $(dirname $(dirname "$0"))
 
 # Compile bazel
-([ -f "output/bazel" ] \
-  && [ -f "tools/jdk/JavaBuilder_deploy.jar" ] \
-  && [ -f "tools/jdk/ijar" ] \
-  && [ -f "tools/jdk/SingleJar_deploy.jar" ] \
-  && [ -f "tools/jdk/GenClass_deploy.jar" ] \
-  && [ -e "tools/jdk/jdk" ]) || ./compile.sh >&2 || exit $?
+[ -f "output/bazel" ] || ./compile.sh >&2 || exit $?
 
 # Make the script use actual bazel
 function bazel() {

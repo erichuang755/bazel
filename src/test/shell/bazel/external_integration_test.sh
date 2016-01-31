@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Copyright 2015 Google Inc. All rights reserved.
+# Copyright 2015 The Bazel Authors. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -145,17 +145,21 @@ fi
   expect_log $what_does_the_fox_say
 
   if [[ $do_symlink = 1 ]]; then
-    if [[ -x ${realpath_path} ]]; then
-      realpath=${realpath_path}
-    else
-      realpath=realpath
-    fi
     base_external_path=bazel-out/../external/endangered/fox
-    assert_equals $(${realpath} ${base_external_path}/male) \
-      $(${realpath} ${base_external_path}/male_relative)
-    assert_equals $(${realpath} ${base_external_path}/male) \
-      $(${realpath} ${base_external_path}/male_absolute)
+    assert_files_same ${base_external_path}/male ${base_external_path}/male_relative
+    assert_files_same ${base_external_path}/male ${base_external_path}/male_absolute
   fi
+}
+
+function assert_files_same() {
+  assert_contains "$(cat $1)" $2 && return 0
+  echo "Expected these to be the same:"
+  echo "---------------------------"
+  cat $1
+  echo "==========================="
+  cat $2
+  echo "---------------------------"
+  return 1
 }
 
 function test_http_archive_zip() {
@@ -274,7 +278,8 @@ EOF
   expect_log $what_does_the_fox_say
 }
 
-function test_changed_zip() {
+# Pending proper external file handling
+function DISABLED_test_changed_zip() {
   nc_port=$(pick_random_unused_tcp_port) || fail "Couldn't get TCP port"
   http_archive_helper zip_up
   http_archive_helper zip_up "nowrite"
@@ -327,23 +332,49 @@ public class BallPit {
 }
 EOF
 
-  bazel fetch //zoo:ball-pit || fail "Fetch failed"
   bazel run //zoo:ball-pit >& $TEST_log || echo "Expected run to succeed"
   kill_nc
   expect_log "Tra-la!"
 }
 
+function test_http_404() {
+  http_response=$TEST_TMPDIR/http_response
+  cat > $http_response <<EOF
+HTTP/1.0 404 Not Found
+
+Help, I'm lost!
+EOF
+  nc_port=$(pick_random_unused_tcp_port) || exit 1
+  nc_l $nc_port < $http_response &
+  nc_pid=$!
+
+  cd ${WORKSPACE_DIR}
+  cat > WORKSPACE <<EOF
+http_file(
+    name = 'toto',
+    url = 'http://localhost:$nc_port/toto',
+    sha256 = 'whatever'
+)
+EOF
+  bazel build @toto//file &> $TEST_log && fail "Expected run to fail"
+  kill_nc
+  expect_log "404: Help, I'm lost!"
+}
+
 # Tests downloading a file and using it as a dependency.
 function test_http_download() {
   local test_file=$TEST_TMPDIR/toto
-  echo "Tra-la!" >$test_file
+  cat > $test_file <<EOF
+#!/bin/bash
+echo "Tra-la!"
+EOF
   local sha256=$(sha256sum $test_file | cut -f 1 -d ' ')
   serve_file $test_file
   cd ${WORKSPACE_DIR}
 
   cat > WORKSPACE <<EOF
 http_file(name = 'toto', url = 'http://localhost:$nc_port/toto',
-    sha256 = '$sha256')
+    sha256 = '$sha256', executable = True)
 EOF
 
   mkdir -p test
@@ -357,11 +388,14 @@ EOF
 
   cat > test/test.sh <<EOF
 #!/bin/bash
-cat external/toto/file/toto
+echo "symlink:"
+ls -l external/toto/file
+echo "dest:"
+ls -l \$(readlink -f external/toto/file/toto)
+external/toto/file/toto
 EOF
 
   chmod +x test/test.sh
-  bazel fetch //test || fail "Fetch failed"
   bazel run //test >& $TEST_log || echo "Expected run to succeed"
   kill_nc
   expect_log "Tra-la!"
@@ -396,12 +430,45 @@ cat external/toto/file/toto
 EOF
 
   chmod +x test/test.sh
-  bazel fetch //test || fail "Fetch failed"
   bazel run //test >& $TEST_log || echo "Expected run to succeed"
   kill_nc
   expect_log "Tra-la!"
 }
 
+function test_empty_file() {
+  rm -f empty
+  touch empty
+  tar czf x.tar.gz empty
+  local sha256=$(sha256sum x.tar.gz | cut -f 1 -d ' ')
+  serve_file x.tar.gz
+
+  cat > WORKSPACE <<EOF
+new_http_archive(
+    name = "x",
+    url = "http://localhost:$nc_port/x.tar.gz",
+    sha256 = "$sha256",
+    build_file = "x.BUILD",
+)
+EOF
+  cat > x.BUILD <<EOF
+exports_files(["empty"])
+EOF
+  cat > BUILD <<'EOF'
+genrule(
+  name = "rule",
+  srcs = ["@x//:empty"],
+  outs = ["timestamp"],
+  cmd = "date > $@",
+)
+EOF
+
+  bazel build //:rule || fail "Build failed"
+  bazel shutdown || fail "Shutdown failed"
+  cp bazel-genfiles/timestamp first_timestamp || fail "No output"
+  sleep 1 # Make sure we're on a different second to avoid false passes.
+  bazel build //:rule || fail "Build failed"
+  diff bazel-genfiles/timestamp first_timestamp || fail "Output was built again"
+}
 
 function test_invalid_rule() {
   # http_jar with missing URL field.
@@ -482,7 +549,8 @@ EOF
   output_base=$(bazel info output_base)
   external_dir=$output_base/external
   needle=endangered
-  [[ $(ls $external_dir | grep $needle) ]] && fail "$needle already in $external_dir"
+  [[ -d $external_dir/$needle ]] \
+      && fail "$needle already exists in $external_dir" || true
   bazel fetch //zoo:ball-pit >& $TEST_log || fail "Fetch failed"
   [[ $(ls $external_dir | grep $needle) ]] || fail "$needle not added to $external_dir"
 
@@ -498,6 +566,170 @@ EOF
   bazel clean --expunge || fail "Clean failed"
   bazel build --fetch=false //zoo:ball-pit >& $TEST_log && fail "Expected build to fail"
   expect_log "bazel fetch //..."
+}
+
+function test_prefix_stripping_tar_gz() {
+  mkdir -p x/y/z
+  echo "abc" > x/y/z/w
+  tar czf x.tar.gz x
+  local sha256=$(sha256sum x.tar.gz | cut -f 1 -d ' ')
+  serve_file x.tar.gz
+
+  cat > WORKSPACE <<EOF
+new_http_archive(
+    name = "x",
+    url = "http://localhost:$nc_port/x.tar.gz",
+    sha256 = "$sha256",
+    strip_prefix = "x/y/z",
+    build_file = "x.BUILD",
+)
+EOF
+  cat > x.BUILD <<EOF
+genrule(
+    name = "catter",
+    cmd = "cat \$< > \$@",
+    outs = ["catter.out"],
+    srcs = ["w"],
+)
+EOF
+
+  bazel build @x//:catter &> $TEST_log || fail "Build failed"
+  assert_contains "abc" bazel-genfiles/external/x/catter.out
+}
+
+function test_prefix_stripping_zip() {
+  mkdir -p x/y/z
+  echo "abc" > x/y/z/w
+  zip -r x x
+  local sha256=$(sha256sum x.zip | cut -f 1 -d ' ')
+  serve_file x.zip
+
+  cat > WORKSPACE <<EOF
+new_http_archive(
+    name = "x",
+    url = "http://localhost:$nc_port/x.zip",
+    sha256 = "$sha256",
+    strip_prefix = "x/y/z",
+    build_file = "x.BUILD",
+)
+EOF
+  cat > x.BUILD <<EOF
+genrule(
+    name = "catter",
+    cmd = "cat \$< > \$@",
+    outs = ["catter.out"],
+    srcs = ["w"],
+)
+EOF
+
+  bazel build @x//:catter &> $TEST_log || fail "Build failed"
+  assert_contains "abc" bazel-genfiles/external/x/catter.out
+}
+
+function test_prefix_stripping_existing_repo() {
+  mkdir -p x/y/z
+  touch x/y/z/WORKSPACE
+  echo "abc" > x/y/z/w
+  cat > x/y/z/BUILD <<EOF
+genrule(
+    name = "catter",
+    cmd = "cat \$< > \$@",
+    outs = ["catter.out"],
+    srcs = ["w"],
+)
+EOF
+  zip -r x x
+  local sha256=$(sha256sum x.zip | cut -f 1 -d ' ')
+  serve_file x.zip
+
+  cat > WORKSPACE <<EOF
+http_archive(
+    name = "x",
+    url = "http://localhost:$nc_port/x.zip",
+    sha256 = "$sha256",
+    strip_prefix = "x/y/z",
+)
+EOF
+
+  bazel build @x//:catter &> $TEST_log || fail "Build failed"
+  assert_contains "abc" bazel-genfiles/external/x/catter.out
+}
+
+function test_moving_build_file() {
+  echo "abc" > w
+  tar czf x.tar.gz w
+  local sha256=$(sha256sum x.tar.gz | cut -f 1 -d ' ')
+  serve_file x.tar.gz
+
+  cat > WORKSPACE <<EOF
+new_http_archive(
+    name = "x",
+    url = "http://localhost:$nc_port/x.tar.gz",
+    sha256 = "$sha256",
+    build_file = "x.BUILD",
+)
+EOF
+  cat > x.BUILD <<EOF
+genrule(
+    name = "catter",
+    cmd = "cat \$< > \$@",
+    outs = ["catter.out"],
+    srcs = ["w"],
+)
+EOF
+
+  bazel build @x//:catter &> $TEST_log || fail "Build 1 failed"
+  assert_contains "abc" bazel-genfiles/external/x/catter.out
+  mv x.BUILD x.BUILD.new || fail "Moving x.BUILD failed"
+  sed 's/x.BUILD/x.BUILD.new/g' WORKSPACE > WORKSPACE.tmp || \
+    fail "Editing WORKSPACE failed"
+  mv WORKSPACE.tmp WORKSPACE
+  serve_file x.tar.gz
+  bazel build @x//:catter &> $TEST_log || fail "Build 2 failed"
+  assert_contains "abc" bazel-genfiles/external/x/catter.out
+}
+
+function test_changing_build_file() {
+  echo "abc" > w
+  echo "def" > w.new
+  tar czf x.tar.gz w w.new
+  local sha256=$(sha256sum x.tar.gz | cut -f 1 -d ' ')
+  serve_file x.tar.gz
+
+  cat > WORKSPACE <<EOF
+new_http_archive(
+    name = "x",
+    url = "http://localhost:$nc_port/x.tar.gz",
+    sha256 = "$sha256",
+    build_file = "x.BUILD",
+)
+EOF
+  cat > x.BUILD <<EOF
+genrule(
+    name = "catter",
+    cmd = "cat \$< > \$@",
+    outs = ["catter.out"],
+    srcs = ["w"],
+)
+EOF
+
+  cat > x.BUILD.new <<EOF
+genrule(
+    name = "catter",
+    cmd = "cat \$< > \$@",
+    outs = ["catter.out"],
+    srcs = ["w.new"],
+)
+EOF
+
+  bazel build @x//:catter || fail "Build 1 failed"
+  assert_contains "abc" bazel-genfiles/external/x/catter.out
+  sed 's/x.BUILD/x.BUILD.new/g' WORKSPACE > WORKSPACE.tmp || \
+    fail "Editing WORKSPACE failed"
+  mv WORKSPACE.tmp WORKSPACE
+  serve_file x.tar.gz
+  bazel build @x//:catter &> $TEST_log || fail "Build 2 failed"
+  assert_contains "def" bazel-genfiles/external/x/catter.out
 }
 
 run_suite "external tests"

@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,7 +16,6 @@ package com.google.devtools.build.lib.rules.cpp;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Joiner;
-import com.google.common.base.Preconditions;
 import com.google.common.base.Predicates;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
@@ -29,13 +28,14 @@ import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.actions.CommandLine;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.CollectionUtils;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainFeatures.FeatureConfiguration;
 import com.google.devtools.build.lib.rules.cpp.Link.LinkStaticness;
 import com.google.devtools.build.lib.rules.cpp.Link.LinkTargetType;
-import com.google.devtools.build.lib.syntax.Label;
 import com.google.devtools.build.lib.util.Pair;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.util.ShellEscaper;
 import com.google.devtools.build.lib.vfs.PathFragment;
 
@@ -938,15 +938,15 @@ public final class LinkCommandLine extends CommandLine {
           if (ltoMap != null) {
             Artifact backend = ltoMap.remove(member);
 
-            if (backend == null) {
-              System.err.println(
-                  "LTO backend file missing for " + member + " already did: " + options);
-              backend = member;
+            if (backend != null) {
+              // If the backend artifact is missing, we can't print a warning because this may
+              // happen normally, due libraries that list .o files explicitly, or generate .o
+              // files from assembler.
+              member = backend;
             }
-            options.add(backend.getExecPathString());
-          } else {
-            options.add(member.getExecPathString());
           }
+
+          options.add(member.getExecPathString());
         }
         options.add("-Wl,--end-lib");
       }
@@ -1013,6 +1013,7 @@ public final class LinkCommandLine extends CommandLine {
     @Nullable private Iterable<LTOBackendArtifacts> allLTOBackendArtifacts;
     @Nullable private Artifact paramFile;
     @Nullable private Artifact interfaceSoBuilder;
+    @Nullable private CcToolchainProvider toolchain;
 
     // This interface is needed to support tests that don't create a
     // ruleContext, in which case the configuration and action owner
@@ -1040,7 +1041,11 @@ public final class LinkCommandLine extends CommandLine {
       FeatureConfiguration featureConfiguration = null;
       // The ruleContext can be null for some tests.
       if (ruleContext != null) {
-        featureConfiguration = CcCommon.configureFeatures(ruleContext);
+        if (toolchain != null) {
+          featureConfiguration = CcCommon.configureFeatures(ruleContext, toolchain);
+        } else {
+          featureConfiguration = CcCommon.configureFeatures(ruleContext);
+        }
         CcToolchainFeatures.Variables.Builder buildVariables =
             new CcToolchainFeatures.Variables.Builder();
         CppConfiguration cppConfiguration = ruleContext.getFragment(CppConfiguration.class);
@@ -1071,6 +1076,15 @@ public final class LinkCommandLine extends CommandLine {
           interfaceSoBuilder,
           variables,
           featureConfiguration);
+    }
+
+    /**
+     * Sets the toolchain to use for link flags. If this is not called, the toolchain
+     * is retrieved from the rule.
+     */
+    public Builder setToolchain(CcToolchainProvider toolchain) {
+      this.toolchain = toolchain;
+      return this;
     }
 
     /**

@@ -1,4 +1,4 @@
-// Copyright 2006-2015 Google Inc. All Rights Reserved.
+// Copyright 2006 The Bazel Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.fail;
 
 import com.google.common.collect.Sets;
+import com.google.devtools.build.lib.syntax.util.EvaluationTestCase;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -121,13 +122,13 @@ public class EnvironmentTest extends EvaluationTestCase {
 
     assertEquals(Sets.newHashSet("foo", "wiz",
             "False", "None", "True",
-            "-", "bool", "dict", "enumerate", "int", "len", "list",
-            "range", "repr", "select", "sorted", "str", "zip"),
+            "-", "all", "any", "bool", "dict", "enumerate", "int", "len", "list",
+            "max", "min", "range", "repr", "reversed", "select", "set", "sorted", "str", "zip"),
         outerEnv.getVariableNames());
     assertEquals(Sets.newHashSet("foo", "wiz", "quux",
             "False", "None", "True",
-            "-", "bool", "dict", "enumerate", "int", "len", "list",
-            "range", "repr", "select", "sorted", "str", "zip"),
+            "-", "all", "any", "bool", "dict", "enumerate", "int", "len", "list",
+            "max", "min", "range", "repr", "reversed", "select", "set", "sorted", "str", "zip"),
         innerEnv.getVariableNames());
   }
 
@@ -135,10 +136,7 @@ public class EnvironmentTest extends EvaluationTestCase {
   public void testToString() throws Exception {
     update("subject", new StringLiteral("Hello, 'world'.", '\''));
     update("from", new StringLiteral("Java", '"'));
-    assertThat(getEnvironment().toString())
-        .startsWith("Environment(lexicalFrame=null, "
-            + "globalFrame=Frame[test]{\"from\": \"Java\", \"subject\": 'Hello, \\'world\\'.'}=>"
-            + "(BUILD){");
+    assertThat(getEnvironment().toString()).isEqualTo("<Environment[test]>");
   }
 
   @Test

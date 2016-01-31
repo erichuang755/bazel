@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,7 +13,6 @@
 // limitations under the License.
 package com.google.devtools.build.lib.rules.cpp;
 
-import com.google.common.base.Preconditions;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.TransitiveInfoProvider;
 import com.google.devtools.build.lib.analysis.config.CompilationMode;
@@ -21,6 +20,7 @@ import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.PathFragment;
 
 import javax.annotation.Nullable;
@@ -125,10 +125,7 @@ public final class CcToolchainProvider implements TransitiveInfoProvider {
    * Returns the files necessary for compilation.
    */
   public NestedSet<Artifact> getCompile() {
-    // If include scanning is disabled, we need the entire crosstool filegroup, including header
-    // files. If it is enabled, we use the filegroup without header files - they are found by
-    // include scanning. For go, we also don't need the header files.
-    return cppConfiguration != null && cppConfiguration.shouldScanIncludes() ? compile : crosstool;
+    return compile;
   }
 
   /**

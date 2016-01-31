@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@
 #include <unistd.h>
 #include <algorithm>
 #include <cassert>
+#include <set>
 #include <utility>
 
 #include "src/main/cpp/blaze_util.h"
@@ -29,12 +30,15 @@
 
 using std::list;
 using std::map;
+using std::set;
 using std::vector;
 
 // On OSX, there apparently is no header that defines this.
 extern char **environ;
 
 namespace blaze {
+
+constexpr char BlazeStartupOptions::WorkspacePrefix[];
 
 OptionProcessor::RcOption::RcOption(int rcfile_index, const string& option)
     : rcfile_index_(rcfile_index), option_(option) {
@@ -45,16 +49,19 @@ OptionProcessor::RcFile::RcFile(const string& filename, int index)
 }
 
 blaze_exit_code::ExitCode OptionProcessor::RcFile::Parse(
+    const string& workspace,
     vector<RcFile*>* rcfiles,
     map<string, vector<RcOption> >* rcoptions,
     string* error) {
   list<string> initial_import_stack;
   initial_import_stack.push_back(filename_);
   return Parse(
-      filename_, index_, rcfiles, rcoptions, &initial_import_stack, error);
+      workspace, filename_, index_, rcfiles, rcoptions, &initial_import_stack,
+      error);
 }
 
 blaze_exit_code::ExitCode OptionProcessor::RcFile::Parse(
+    const string& workspace,
     const string& filename_ref,
     const int index,
     vector<RcFile*>* rcfiles,
@@ -101,13 +108,16 @@ blaze_exit_code::ExitCode OptionProcessor::RcFile::Parse(
     string command = words[0];
 
     if (command == "import") {
-      if (words.size() != 2) {
+      if (words.size() != 2
+          || (words[1].compare(0, BlazeStartupOptions::WorkspacePrefixLength,
+                               BlazeStartupOptions::WorkspacePrefix) == 0
+              && !BlazeStartupOptions::WorkspaceRelativizeRcFilePath(
+                  workspace, &words[1]))) {
         blaze_util::StringPrintf(error,
             "Invalid import declaration in .blazerc file '%s': '%s'",
             filename.c_str(), lines[line].c_str());
         return blaze_exit_code::BAD_ARGV;
       }
-
       if (std::find(import_stack->begin(), import_stack->end(), words[1]) !=
           import_stack->end()) {
         string loop;
@@ -123,8 +133,9 @@ blaze_exit_code::ExitCode OptionProcessor::RcFile::Parse(
       rcfiles->push_back(new RcFile(words[1], rcfiles->size()));
       import_stack->push_back(words[1]);
       blaze_exit_code::ExitCode parse_exit_code =
-        RcFile::Parse(rcfiles->back()->Filename(), rcfiles->back()->Index(),
-          rcfiles, rcoptions, import_stack, error);
+        RcFile::Parse(workspace, rcfiles->back()->Filename(),
+                      rcfiles->back()->Index(),
+                      rcfiles, rcoptions, import_stack, error);
       if (parse_exit_code != blaze_exit_code::SUCCESS) {
         return parse_exit_code;
       }
@@ -269,37 +280,13 @@ blaze_exit_code::ExitCode OptionProcessor::ParseOptions(
   }
 
   // Parse depot and user blazerc files.
-  // This is not a little ineffective (copying a multimap around), but it is a
+  // This is a little inefficient (copying a multimap around), but it is a
   // small one and this way I don't have to care about memory management.
+  vector<string> candidate_blazerc_paths;
   if (use_master_blazerc) {
-    string depot_blazerc_path = FindDepotBlazerc(workspace);
-    if (!depot_blazerc_path.empty()) {
-      blazercs_.push_back(new RcFile(depot_blazerc_path, blazercs_.size()));
-      blaze_exit_code::ExitCode parse_exit_code =
-          blazercs_.back()->Parse(&blazercs_, &rcoptions_, error);
-      if (parse_exit_code != blaze_exit_code::SUCCESS) {
-        return parse_exit_code;
-      }
-    }
-    string alongside_binary_blazerc = FindAlongsideBinaryBlazerc(cwd, args[0]);
-    if (!alongside_binary_blazerc.empty()) {
-      blazercs_.push_back(new RcFile(alongside_binary_blazerc,
-          blazercs_.size()));
-      blaze_exit_code::ExitCode parse_exit_code =
-          blazercs_.back()->Parse(&blazercs_, &rcoptions_, error);
-      if (parse_exit_code != blaze_exit_code::SUCCESS) {
-        return parse_exit_code;
-      }
-    }
-    string system_wide_blazerc = FindSystemWideBlazerc();
-    if (!system_wide_blazerc.empty()) {
-      blazercs_.push_back(new RcFile(system_wide_blazerc, blazercs_.size()));
-      blaze_exit_code::ExitCode parse_exit_code =
-          blazercs_.back()->Parse(&blazercs_, &rcoptions_, error);
-      if (parse_exit_code != blaze_exit_code::SUCCESS) {
-        return parse_exit_code;
-      }
-    }
+    candidate_blazerc_paths.push_back(FindDepotBlazerc(workspace));
+    candidate_blazerc_paths.push_back(FindAlongsideBinaryBlazerc(cwd, args[0]));
+    candidate_blazerc_paths.push_back(FindSystemWideBlazerc());
   }
 
   string user_blazerc_path;
@@ -309,12 +296,22 @@ blaze_exit_code::ExitCode OptionProcessor::ParseOptions(
   if (find_blazerc_exit_code != blaze_exit_code::SUCCESS) {
     return find_blazerc_exit_code;
   }
-  if (!user_blazerc_path.empty()) {
-    blazercs_.push_back(new RcFile(user_blazerc_path, blazercs_.size()));
-    blaze_exit_code::ExitCode parse_exit_code =
-        blazercs_.back()->Parse(&blazercs_, &rcoptions_, error);
-    if (parse_exit_code != blaze_exit_code::SUCCESS) {
-      return parse_exit_code;
+  candidate_blazerc_paths.push_back(user_blazerc_path);
+
+  // Throw away missing files, dedupe candidate blazerc paths, and parse the
+  // blazercs, all while preserving order. Duplicates can arise if e.g. the
+  // binary's path *is* the depot path.
+  set<string> blazerc_paths;
+  for (const auto& candidate_blazerc_path : candidate_blazerc_paths) {
+    if (!candidate_blazerc_path.empty()
+        && (blazerc_paths.insert(candidate_blazerc_path).second)) {
+      blazercs_.push_back(
+          new RcFile(candidate_blazerc_path, blazercs_.size()));
+      blaze_exit_code::ExitCode parse_exit_code =
+          blazercs_.back()->Parse(workspace, &blazercs_, &rcoptions_, error);
+      if (parse_exit_code != blaze_exit_code::SUCCESS) {
+        return parse_exit_code;
+      }
     }
   }
 

@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,6 @@
 package com.google.devtools.build.lib.buildtool;
 
 import com.google.common.base.Joiner;
-import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
 import com.google.common.base.Stopwatch;
 import com.google.common.collect.HashBasedTable;
@@ -24,7 +23,6 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Ordering;
 import com.google.common.collect.Table;
-import com.google.common.eventbus.EventBus;
 import com.google.devtools.build.lib.Constants;
 import com.google.devtools.build.lib.actions.Action;
 import com.google.devtools.build.lib.actions.ActionCacheChecker;
@@ -51,21 +49,13 @@ import com.google.devtools.build.lib.actions.cache.ActionCache;
 import com.google.devtools.build.lib.analysis.BuildView;
 import com.google.devtools.build.lib.analysis.BuildView.AnalysisResult;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
-import com.google.devtools.build.lib.analysis.FileProvider;
-import com.google.devtools.build.lib.analysis.InputFileConfiguredTarget;
-import com.google.devtools.build.lib.analysis.OutputFileConfiguredTarget;
-import com.google.devtools.build.lib.analysis.OutputGroupProvider;
 import com.google.devtools.build.lib.analysis.SymlinkTreeActionContext;
-import com.google.devtools.build.lib.analysis.TopLevelArtifactContext;
 import com.google.devtools.build.lib.analysis.TopLevelArtifactHelper;
-import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.WorkspaceStatusAction;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildConfigurationCollection;
 import com.google.devtools.build.lib.buildtool.buildevent.ExecutionPhaseCompleteEvent;
 import com.google.devtools.build.lib.buildtool.buildevent.ExecutionStartingEvent;
-import com.google.devtools.build.lib.collect.CollectionUtils;
-import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.events.EventKind;
@@ -75,7 +65,6 @@ import com.google.devtools.build.lib.exec.ExecutionOptions;
 import com.google.devtools.build.lib.exec.OutputService;
 import com.google.devtools.build.lib.exec.SingleBuildFileCache;
 import com.google.devtools.build.lib.exec.SymlinkTreeStrategy;
-import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.profiler.AutoProfiler;
 import com.google.devtools.build.lib.profiler.ProfilePhase;
 import com.google.devtools.build.lib.profiler.Profiler;
@@ -85,16 +74,17 @@ import com.google.devtools.build.lib.rules.fileset.FilesetActionContextImpl;
 import com.google.devtools.build.lib.rules.test.TestActionContext;
 import com.google.devtools.build.lib.runtime.BlazeModule;
 import com.google.devtools.build.lib.runtime.BlazeRuntime;
+import com.google.devtools.build.lib.runtime.CommandEnvironment;
 import com.google.devtools.build.lib.skyframe.AspectValue;
 import com.google.devtools.build.lib.skyframe.Builder;
 import com.google.devtools.build.lib.skyframe.SkyframeExecutor;
-import com.google.devtools.build.lib.syntax.Label;
 import com.google.devtools.build.lib.util.AbruptExitException;
 import com.google.devtools.build.lib.util.ExitCode;
 import com.google.devtools.build.lib.util.LoggingUtil;
-import com.google.devtools.build.lib.util.io.OutErr;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
+import com.google.devtools.build.lib.vfs.ModifiedFileSet;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 
@@ -114,8 +104,6 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-
-import javax.annotation.Nullable;
 
 /**
  * This class manages the execution phase. The entry point is {@link #executeBuild}.
@@ -174,6 +162,7 @@ public class ExecutionTool {
 
   static final Logger LOG = Logger.getLogger(ExecutionTool.class.getName());
 
+  private final CommandEnvironment env;
   private final BlazeRuntime runtime;
   private final BuildRequest request;
   private BlazeExecutor executor;
@@ -184,28 +173,9 @@ public class ExecutionTool {
       new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
   private List<ActionContext> strategies = new ArrayList<>();
 
-  private ImmutableList<ActionContextConsumer> getActionContextConsumersFromModules(
-      ActionContextConsumer... extraConsumers) {
-    ImmutableList.Builder<ActionContextConsumer> builder = ImmutableList.builder();
-    for (BlazeModule module : runtime.getBlazeModules()) {
-      builder.addAll(module.getActionContextConsumers());
-    }
-    builder.add(extraConsumers);
-    return builder.build();
-  }
-
-  private ImmutableList<ActionContextProvider> getActionContextProvidersFromModules(
-      ActionContextProvider... extraProviders) {
-    ImmutableList.Builder<ActionContextProvider> builder = ImmutableList.builder();
-    for (BlazeModule module : runtime.getBlazeModules()) {
-      builder.addAll(module.getActionContextProviders());
-    }
-    builder.add(extraProviders);
-    return builder.build();
-  }
-
-  ExecutionTool(final BlazeRuntime runtime, BuildRequest request) throws ExecutorInitException {
-    this.runtime = runtime;
+  ExecutionTool(CommandEnvironment env, BuildRequest request) throws ExecutorInitException {
+    this.env = env;
+    this.runtime = env.getRuntime();
     this.request = request;
 
     // Create tools before getting the strategies from the modules as some of them need tools to
@@ -214,14 +184,16 @@ public class ExecutionTool {
 
     this.actionContextProviders =
         getActionContextProvidersFromModules(
+            runtime,
             new FilesetActionContextImpl.Provider(
-                runtime.getReporter(), runtime.getWorkspaceName()),
+                env.getReporter(), runtime.getWorkspaceName()),
             new SimpleActionContextProvider(
-                new SymlinkTreeStrategy(runtime.getOutputService(), runtime.getBinTools())));
+                new SymlinkTreeStrategy(env.getOutputService(), runtime.getBinTools())));
     StrategyConverter strategyConverter = new StrategyConverter(actionContextProviders);
 
     ImmutableList<ActionContextConsumer> actionContextConsumers =
         getActionContextConsumersFromModules(
+            runtime,
             // TODO(philwo) - the ExecutionTool should not add arbitrary dependencies on its own,
             // instead these dependencies should be added to the ActionContextConsumer of the module
             // that actually depends on them.
@@ -284,6 +256,26 @@ public class ExecutionTool {
     }
   }
 
+  private static ImmutableList<ActionContextConsumer> getActionContextConsumersFromModules(
+      BlazeRuntime runtime, ActionContextConsumer... extraConsumers) {
+    ImmutableList.Builder<ActionContextConsumer> builder = ImmutableList.builder();
+    for (BlazeModule module : runtime.getBlazeModules()) {
+      builder.addAll(module.getActionContextConsumers());
+    }
+    builder.add(extraConsumers);
+    return builder.build();
+  }
+
+  private static ImmutableList<ActionContextProvider> getActionContextProvidersFromModules(
+      BlazeRuntime runtime, ActionContextProvider... extraProviders) {
+    ImmutableList.Builder<ActionContextProvider> builder = ImmutableList.builder();
+    for (BlazeModule module : runtime.getBlazeModules()) {
+      builder.addAll(module.getActionContextProviders());
+    }
+    builder.add(extraProviders);
+    return builder.build();
+  }
+
   private static ExecutorInitException makeExceptionForInvalidStrategyValue(String value,
       String strategy, String validValues) {
     return new ExecutorInitException(String.format(
@@ -307,7 +299,7 @@ public class ExecutionTool {
         runtime.getDirectories().getExecRoot(),
         runtime.getDirectories().getOutputPath(),
         getReporter(),
-        getEventBus(),
+        env.getEventBus(),
         runtime.getClock(),
         request,
         request.getOptions(ExecutionOptions.class).verboseFailures,
@@ -334,12 +326,11 @@ public class ExecutionTool {
    * @param buildId UUID of the build id
    * @param analysisResult the analysis phase output
    * @param buildResult the mutable build result
-   * @param skyframeExecutor the skyframe executor (if any)
-   * @param packageRoots package roots collected from loading phase and BuildConfigutaionCollection
+   * @param packageRoots package roots collected from loading phase and BuildConfigurationCollection
    * creation
    */
   void executeBuild(UUID buildId, AnalysisResult analysisResult,
-      BuildResult buildResult, @Nullable SkyframeExecutor skyframeExecutor,
+      BuildResult buildResult,
       BuildConfigurationCollection configurations,
       ImmutableMap<PathFragment, Path> packageRoots)
       throws BuildFailedException, InterruptedException, TestExecException, AbruptExitException {
@@ -351,31 +342,29 @@ public class ExecutionTool {
     // Get top-level artifacts.
     ImmutableSet<Artifact> additionalArtifacts = analysisResult.getAdditionalArtifactsToBuild();
 
-    // Create symlinks only after we've verified that we're actually
-    // supposed to build something.
-    if (getWorkspace().getFileSystem().supportsSymbolicLinks()) {
-      List<BuildConfiguration> targetConfigurations =
-          getView().getConfigurationCollection().getTargetConfigurations();
-      // TODO(bazel-team): This is not optimal - we retain backwards compatibility in the case where
-      // there's only a single configuration, but we don't create any symlinks in the multi-config
-      // case. Can we do better? [multi-config]
-      if (targetConfigurations.size() == 1) {
-        OutputDirectoryLinksUtils.createOutputDirectoryLinks(
-            runtime.getWorkspaceName(), getWorkspace(), getExecRoot(),
-            runtime.getOutputPath(), getReporter(), targetConfigurations.get(0),
-            request.getSymlinkPrefix());
-      }
-    }
-
-    OutputService outputService = runtime.getOutputService();
+    OutputService outputService = env.getOutputService();
+    ModifiedFileSet modifiedOutputFiles = ModifiedFileSet.EVERYTHING_MODIFIED;
     if (outputService != null) {
-      outputService.startBuild(buildId);
+      modifiedOutputFiles = outputService.startBuild(buildId,
+              request.getBuildOptions().finalizeActions);
     } else {
       startLocalOutputBuild(); // TODO(bazel-team): this could be just another OutputService
     }
 
+    List<BuildConfiguration> targetConfigurations = configurations.getTargetConfigurations();
+    BuildConfiguration targetConfiguration = targetConfigurations.size() == 1
+        ? targetConfigurations.get(0) : null;
+    if (targetConfigurations.size() == 1) {
+      OutputDirectoryLinksUtils.createOutputDirectoryLinks(
+          runtime.getWorkspaceName(), getWorkspace(), getExecRoot(),
+          runtime.getOutputPath(), getReporter(), targetConfiguration,
+          request.getBuildOptions().getSymlinkPrefix());
+    }
+
     ActionCache actionCache = getActionCache();
-    Builder builder = createBuilder(request, executor, actionCache, skyframeExecutor);
+    SkyframeExecutor skyframeExecutor = env.getSkyframeExecutor();
+    Builder builder =
+            createBuilder(request, executor, actionCache, skyframeExecutor, modifiedOutputFiles);
 
     //
     // Execution proper.  All statements below are logically nested in
@@ -383,7 +372,7 @@ public class ExecutionTool {
     //
 
     Collection<ConfiguredTarget> configuredTargets = buildResult.getActualTargets();
-    getEventBus().post(new ExecutionStartingEvent(configuredTargets));
+    env.getEventBus().post(new ExecutionStartingEvent(configuredTargets));
 
     getReporter().handle(Event.progress("Building..."));
 
@@ -393,26 +382,26 @@ public class ExecutionTool {
                                   request.getOptionsDescription());
 
     Set<ConfiguredTarget> builtTargets = new HashSet<>();
-    boolean interrupted = false;
+    Collection<AspectValue> aspects = analysisResult.getAspects();
+
+    Iterable<Artifact> allArtifactsForProviders =
+        Iterables.concat(
+            additionalArtifacts,
+            TopLevelArtifactHelper.getAllArtifactsToBuild(
+                    analysisResult.getTargetsToBuild(), analysisResult.getTopLevelContext())
+                .getAllArtifacts(),
+            TopLevelArtifactHelper.getAllArtifactsToBuildFromAspects(
+                    aspects, analysisResult.getTopLevelContext())
+                .getAllArtifacts(),
+            //TODO(dslomov): Artifacts to test from aspects?
+            TopLevelArtifactHelper.getAllArtifactsToTest(analysisResult.getTargetsToTest()));
+
+    if (request.isRunningInEmacs()) {
+      // The syntax of this message is tightly constrained by lisp/progmodes/compile.el in emacs
+      request.getOutErr().printErrLn("blaze: Entering directory `" + getExecRoot() + "/'");
+    }
+    boolean buildCompleted = false;
     try {
-      Collection<AspectValue> aspects = analysisResult.getAspects();
-
-      Iterable<Artifact> allArtifactsForProviders =
-          Iterables.concat(
-              additionalArtifacts,
-              TopLevelArtifactHelper.getAllArtifactsToBuild(
-                      analysisResult.getTargetsToBuild(), analysisResult.getTopLevelContext())
-                  .getAllArtifacts(),
-              TopLevelArtifactHelper.getAllArtifactsToBuildFromAspects(
-                      aspects, analysisResult.getTopLevelContext())
-                  .getAllArtifacts(),
-              //TODO(dslomov): Artifacts to test from aspects?
-              TopLevelArtifactHelper.getAllArtifactsToTest(analysisResult.getTargetsToTest()));
-
-      if (request.isRunningInEmacs()) {
-        // The syntax of this message is tightly constrained by lisp/progmodes/compile.el in emacs
-        request.getOutErr().printErrLn("blaze: Entering directory `" + getExecRoot() + "/'");
-      }
       for (ActionContextProvider actionContextProvider : actionContextProviders) {
         actionContextProvider.executionPhaseStarting(
             fileCache,
@@ -426,7 +415,7 @@ public class ExecutionTool {
         // Free memory by removing cache entries that aren't going to be needed. Note that in
         // skyframe full, this destroys the action graph as well, so we can only do it after the
         // action graph is no longer needed.
-        getView().clearAnalysisCache(analysisResult.getTargetsToBuild());
+        env.getView().clearAnalysisCache(analysisResult.getTargetsToBuild());
         actionGraph = null;
       }
 
@@ -435,6 +424,7 @@ public class ExecutionTool {
       Profiler.instance().markPhase(ProfilePhase.EXECUTE);
 
       builder.buildArtifacts(
+          env.getReporter(),
           additionalArtifacts,
           analysisResult.getParallelTests(),
           analysisResult.getExclusiveTests(),
@@ -444,20 +434,20 @@ public class ExecutionTool {
           builtTargets,
           request.getBuildOptions().explanationPath != null,
           runtime.getLastExecutionTimeRange());
-
-    } catch (InterruptedException e) {
-      interrupted = true;
+      buildCompleted = true;
+    } catch (BuildFailedException | TestExecException e) {
+      buildCompleted = true;
       throw e;
     } finally {
-      runtime.recordLastExecutionTime();
+      env.recordLastExecutionTime();
       if (request.isRunningInEmacs()) {
         request.getOutErr().printErrLn("blaze: Leaving directory `" + getExecRoot() + "/'");
       }
-      if (!interrupted) {
+      if (buildCompleted) {
         getReporter().handle(Event.progress("Building complete."));
       }
 
-      runtime.getEventBus().post(new ExecutionFinishedEvent(ImmutableMap.<String, Long> of(), 0L,
+      env.getEventBus().post(new ExecutionFinishedEvent(ImmutableMap.<String, Long> of(), 0L,
           skyframeExecutor.getOutputDirtyFilesAndClear(),
           skyframeExecutor.getModifiedFilesDuringPreviousBuildAndClear()));
 
@@ -468,24 +458,35 @@ public class ExecutionTool {
 
       Profiler.instance().markPhase(ProfilePhase.FINISH);
 
-      if (!interrupted) {
+      if (buildCompleted) {
         saveCaches(actionCache);
       }
 
       try (AutoProfiler p = AutoProfiler.profiled("Show results", ProfilerTask.INFO)) {
-        determineSuccessfulTargets(buildResult, configuredTargets, builtTargets, timer);
-        showBuildResult(request, buildResult, configuredTargets, analysisResult.getAspects());
-        Preconditions.checkNotNull(buildResult.getSuccessfulTargets());
+        buildResult.setSuccessfulTargets(
+            determineSuccessfulTargets(configuredTargets, builtTargets, timer));
+        BuildResultPrinter buildResultPrinter = new BuildResultPrinter(env);
+        buildResultPrinter.showBuildResult(
+            request, buildResult, configuredTargets, analysisResult.getAspects());
       }
+
+      try (AutoProfiler p = AutoProfiler.profiled("Show artifacts", ProfilerTask.INFO)) {
+        if (request.getBuildOptions().showArtifacts) {
+          BuildResultPrinter buildResultPrinter = new BuildResultPrinter(env);
+          buildResultPrinter.showArtifacts(
+              request, configuredTargets, analysisResult.getAspects());
+        }
+      }
+
       if (explanationHandler != null) {
         uninstallExplanationHandler(explanationHandler);
       }
       // Finalize output service last, so that if we do throw an exception, we know all the other
       // code has already run.
-      if (runtime.getOutputService() != null) {
+      if (env.getOutputService() != null) {
         boolean isBuildSuccessful =
             buildResult.getSuccessfulTargets().size() == configuredTargets.size();
-        runtime.getOutputService().finalizeBuild(isBuildSuccessful);
+        env.getOutputService().finalizeBuild(isBuildSuccessful);
       }
     }
   }
@@ -627,7 +628,7 @@ public class ExecutionTool {
    *                          built.
    * @param timer A timer that was started when the execution phase started.
    */
-  private void determineSuccessfulTargets(BuildResult result,
+  private Collection<ConfiguredTarget> determineSuccessfulTargets(
       Collection<ConfiguredTarget> configuredTargets, Set<ConfiguredTarget> builtTargets,
       Stopwatch timer) {
     // Maintain the ordering by copying builtTargets into a LinkedHashSet in the same iteration
@@ -638,176 +639,15 @@ public class ExecutionTool {
         successfulTargets.add(target);
       }
     }
-    getEventBus().post(
+    env.getEventBus().post(
         new ExecutionPhaseCompleteEvent(timer.stop().elapsed(TimeUnit.MILLISECONDS)));
-    result.setSuccessfulTargets(successfulTargets);
+    return successfulTargets;
   }
 
-
-  private interface ArtifactFormatter {
-    boolean shouldPrint(Artifact artifact);
-    String format(Artifact artifact);
-  }
-
-  private class BriefArtifactFormatter implements ArtifactFormatter {
-    @Override
-    public boolean shouldPrint(Artifact artifact) {
-      return !artifact.isSourceArtifact() && !artifact.isMiddlemanArtifact();
-    }
-
-    @Override
-    public String format(Artifact artifact) {
-      return "  " +
-          OutputDirectoryLinksUtils.getPrettyPath(artifact.getPath(),
-              runtime.getWorkspaceName(), getWorkspace(), request.getSymlinkPrefix());
-    }
-  }
-
-  private class DetailedArtifactFormatter implements ArtifactFormatter {
-    @Override
-    public boolean shouldPrint(Artifact artifact) {
-      return !artifact.isSourceArtifact();
-    }
-
-    @Override
-    public String format(Artifact artifact) {
-      return ">>>" + artifact.getPath();
-    }
-  }
-
-  /**
-   * Shows the result of the build. Information includes the list of up-to-date
-   * and failed targets and list of output artifacts for successful targets
-   *  @param request The build request, which specifies various options.
-   * @param configuredTargets The configured targets whose artifacts are to be
-   *   built.
-   *@param aspects
-   */
-  private void showBuildResult(
-      BuildRequest request,
-      BuildResult result,
-      Collection<ConfiguredTarget> configuredTargets,
-      Collection<AspectValue> aspects) {
-    // NOTE: be careful what you print!  We don't want to create a consistency
-    // problem where the summary message and the exit code disagree.  The logic
-    // here is already complex.
-
-    // Filter the targets we care about into two buckets:
-    Collection<ConfiguredTarget> succeeded = new ArrayList<>();
-    Collection<ConfiguredTarget> failed = new ArrayList<>();
-    for (ConfiguredTarget target : configuredTargets) {
-      // TODO(bazel-team): this is quite ugly. Add a marker provider for this check.
-      if (target instanceof InputFileConfiguredTarget) {
-        // Suppress display of source files (because we do no work to build them).
-        continue;
-      }
-      if (target.getTarget() instanceof Rule) {
-        Rule rule = (Rule) target.getTarget();
-        if (rule.getRuleClass().contains("$")) {
-          // Suppress display of hidden rules
-          continue;
-        }
-      }
-      if (target instanceof OutputFileConfiguredTarget) {
-        // Suppress display of generated files (because they appear underneath
-        // their generating rule), EXCEPT those ones which are not part of the
-        // filesToBuild of their generating rule (e.g. .par, _deploy.jar
-        // files), OR when a user explicitly requests an output file but not
-        // its rule.
-        TransitiveInfoCollection generatingRule =
-            getView().getGeneratingRule((OutputFileConfiguredTarget) target);
-        if (CollectionUtils.containsAll(
-            generatingRule.getProvider(FileProvider.class).getFilesToBuild(),
-            target.getProvider(FileProvider.class).getFilesToBuild()) &&
-            configuredTargets.contains(generatingRule)) {
-          continue;
-        }
-      }
-
-      Collection<ConfiguredTarget> successfulTargets = result.getSuccessfulTargets();
-      (successfulTargets.contains(target) ? succeeded : failed).add(target);
-    }
-
-    // Suppress summary if --show_result value is exceeded:
-    if (succeeded.size() + failed.size() + aspects.size()
-        > request.getBuildOptions().maxResultTargets) {
-      return;
-    }
-
-    OutErr outErr = request.getOutErr();
-
-    ArtifactFormatter formatter =
-        request.getBuildOptions().detailedResult
-        ? new DetailedArtifactFormatter()
-        : new BriefArtifactFormatter();
-
-    TopLevelArtifactContext context = request.getTopLevelArtifactContext();
-    for (ConfiguredTarget target : succeeded) {
-      Label label = target.getLabel();
-      // For up-to-date targets report generated artifacts, but only
-      // if they have associated action and not middleman artifacts.
-      boolean headerFlag = true;
-      for (Artifact artifact :
-          TopLevelArtifactHelper.getAllArtifactsToBuild(target, context).getImportantArtifacts()) {
-        if (formatter.shouldPrint(artifact)) {
-          if (headerFlag) {
-            outErr.printErr("Target " + label + " up-to-date:\n");
-            headerFlag = false;
-          }
-          outErr.printErrLn(formatter.format(artifact));
-        }
-      }
-      if (headerFlag) {
-        outErr.printErr("Target " + label + " up-to-date (nothing to build)\n");
-      }
-    }
-
-    for (AspectValue aspect : aspects) {
-      Label label = aspect.getLabel();
-      String aspectName = aspect.getAspect().getName();
-      boolean headerFlag = true;
-      NestedSet<Artifact> importantArtifacts =
-          TopLevelArtifactHelper.getAllArtifactsToBuild(aspect, context).getImportantArtifacts();
-      for (Artifact importantArtifact : importantArtifacts) {
-        if (headerFlag) {
-          outErr.printErr("Aspect " + aspectName + " of " + label + " up-to-date:\n");
-          headerFlag = false;
-        }
-        if (formatter.shouldPrint(importantArtifact)) {
-          outErr.printErrLn(formatter.format(importantArtifact));
-        }
-      }
-      if (headerFlag) {
-        outErr.printErr(
-            "Aspect " + aspectName + " of " + label + " up-to-date (nothing to build)\n");
-      }
-    }
-
-    for (ConfiguredTarget target : failed) {
-      outErr.printErr("Target " + target.getLabel() + " failed to build\n");
-
-      // For failed compilation, it is still useful to examine temp artifacts,
-      // (ie, preprocessed and assembler files).
-      OutputGroupProvider topLevelProvider =
-          target.getProvider(OutputGroupProvider.class);
-      if (topLevelProvider != null) {
-        for (Artifact temp : topLevelProvider.getOutputGroup(OutputGroupProvider.TEMP_FILES)) {
-          if (temp.getPath().exists()) {
-            outErr.printErrLn("  See temp at " +
-                OutputDirectoryLinksUtils.getPrettyPath(temp.getPath(),
-                    runtime.getWorkspaceName(), getWorkspace(), request.getSymlinkPrefix()));
-          }
-        }
-      }
-    }
-    if (!failed.isEmpty() && !request.getOptions(ExecutionOptions.class).verboseFailures) {
-      outErr.printErr("Use --verbose_failures to see the command lines of failed build steps.\n");
-    }
-  }
 
   private ActionCache getActionCache() throws LocalEnvironmentException {
     try {
-      return runtime.getPersistentActionCache();
+      return env.getPersistentActionCache();
     } catch (IOException e) {
       // TODO(bazel-team): (2010) Ideally we should just remove all cache data and reinitialize
       // caches.
@@ -821,7 +661,8 @@ public class ExecutionTool {
   private Builder createBuilder(BuildRequest request,
       Executor executor,
       ActionCache actionCache,
-      SkyframeExecutor skyframeExecutor) {
+      SkyframeExecutor skyframeExecutor,
+      ModifiedFileSet modifiedOutputFiles) {
     BuildRequest.BuildRequestOptions options = request.getBuildOptions();
     boolean verboseExplanations = options.verboseExplanations;
     boolean keepGoing = request.getViewOptions().keepGoing;
@@ -839,10 +680,11 @@ public class ExecutionTool {
     fileCache = createBuildSingleFileCache(executor.getExecRoot());
     skyframeExecutor.setActionOutputRoot(actionOutputRoot);
     return new SkyframeBuilder(skyframeExecutor,
-        new ActionCacheChecker(actionCache, getView().getArtifactFactory(), executionFilter,
+        new ActionCacheChecker(actionCache, env.getView().getArtifactFactory(), executionFilter,
             verboseExplanations),
-        keepGoing, actualJobs, options.checkOutputFiles, fileCache,
-        request.getBuildOptions().progressReportInterval);
+        keepGoing, actualJobs,
+        options.checkOutputFiles ? modifiedOutputFiles : ModifiedFileSet.NOTHING_MODIFIED,
+        options.finalizeActions, fileCache, request.getBuildOptions().progressReportInterval);
   }
 
   private void configureResourceManager(BuildRequest request) {
@@ -882,7 +724,7 @@ public class ExecutionTool {
     } finally {
       actionCacheSaveTime = p.completeAndGetElapsedTimeNanos();
     }
-    runtime.getEventBus().post(new CachesSavedEvent(
+    env.getEventBus().post(new CachesSavedEvent(
         actionCacheSaveTime, actionCacheSizeInBytes));
   }
 
@@ -906,15 +748,7 @@ public class ExecutionTool {
   }
 
   private Reporter getReporter() {
-    return runtime.getReporter();
-  }
-
-  private EventBus getEventBus() {
-    return runtime.getEventBus();
-  }
-
-  private BuildView getView() {
-    return runtime.getView();
+    return env.getReporter();
   }
 
   private Path getWorkspace() {

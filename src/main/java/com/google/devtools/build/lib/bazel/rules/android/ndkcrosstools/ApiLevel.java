@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@ import com.google.devtools.build.lib.events.EventHandler;
 /**
  * Class which encodes information from the Android NDK makefiles about API levels. 
  */
-class ApiLevel {
+public class ApiLevel {
 
   /**
    * Maps an Android API level to the architectures that that level supports.
@@ -107,7 +107,7 @@ class ApiLevel {
 
   private final String correctedApiLevel;
 
-  ApiLevel(EventHandler eventHandler, String repositoryName, String apiLevel) {
+  public ApiLevel(EventHandler eventHandler, String repositoryName, String apiLevel) {
     this.correctedApiLevel = getCorrectedApiLevel(eventHandler, repositoryName, apiLevel);
   }
 

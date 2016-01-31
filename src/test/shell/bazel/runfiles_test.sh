@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Copyright 2015 Google Inc. All rights reserved.
+# Copyright 2015 The Bazel Authors. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -25,7 +25,7 @@ source $(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-setup.sh \
 # workspace() is specified in the WORKSPACE file.
 function test_runfiles() {
 
-  name=blorp/malorp
+  name=blorp_malorp
   cat > WORKSPACE <<EOF
 workspace(name = "$name")
 

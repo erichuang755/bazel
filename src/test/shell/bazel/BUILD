@@ -19,14 +19,16 @@ filegroup(
     srcs = select({
         ":darwin": [
             "//src/objc_tools/bundlemerge:bundlemerge_deploy.jar",
-            "//src/objc_tools/momczip:momczip_deploy.jar",
             "//src/objc_tools/plmerge:plmerge_deploy.jar",
             "//src/objc_tools/xcodegen:xcodegen_deploy.jar",
-            "//src/tools/xcode-common/java/com/google/devtools/build/xcode/actoolzip:actoolzip_deploy.jar",
-            "//src/tools/xcode-common/java/com/google/devtools/build/xcode/swiftstdlibtoolzip:swiftstdlibtoolzip_deploy.jar",
+            "//src/tools/xcode/actoolwrapper",
+            "//src/tools/xcode/environment:environment_plist",
             "//src/tools/xcode/ibtoolwrapper",
+            "//src/tools/xcode/momcwrapper",
             "//src/tools/xcode/realpath",
             "//src/tools/xcode/stdredirect:StdRedirect.dylib",
+            "//src/tools/xcode/swiftstdlibtoolwrapper",
+            "//src/tools/xcode/xcrunwrapper",
             "//third_party/iossim",
         ],
         "//conditions:default": [],
@@ -37,11 +39,12 @@ filegroup(
     name = "test-deps",
     testonly = 1,
     srcs = [
+        "bazel_sandboxing_test_utils.sh",
         "remote_helpers.sh",
         "test-setup.sh",
         "testenv.sh",
+        "testing_server.py",
         ":langtools-copy",
-        ":objc-deps",
         "//examples:srcs",
         "//external:bootclasspath",
         "//external:extdir",
@@ -49,6 +52,7 @@ filegroup(
         "//src:bazel",
         "//src/java_tools/buildjar:JavaBuilder_deploy.jar",
         "//src/java_tools/buildjar/java/com/google/devtools/build/buildjar/genclass:GenClass_deploy.jar",
+        "//src/java_tools/junitrunner/java/com/google/testing/junit/runner:Runner_deploy.jar",
         "//src/java_tools/singlejar:SingleJar_deploy.jar",
         "//src/main/tools:namespace-sandbox",
         "//src/main/tools:process-wrapper",
@@ -59,7 +63,7 @@ filegroup(
         "//tools:srcs",
     ],
     visibility = [
-        "//src/test/shell/bazel:__subpackages__",
+        "//src/test/shell:__subpackages__",
     ],
 )
 
@@ -67,7 +71,10 @@ sh_test(
     name = "bazel_example_test",
     size = "large",
     srcs = ["bazel_example_test.sh"],
-    data = [":test-deps"],
+    data = [
+        ":objc-deps",
+        ":test-deps",
+    ],
     shard_count = 3,
 )
 
@@ -78,7 +85,21 @@ sh_test(
 )
 
 sh_test(
+    name = "bazel_go_example_test",
+    srcs = ["bazel_go_example_test.sh"],
+    data = [
+        ":test-deps",
+        "//tools/build_rules/go:srcs",
+        "//tools/build_rules/go/toolchain",
+        "//tools/build_rules/go/toolchain:go_tool",
+        "//tools/build_rules/go/toolchain:srcs",
+        "//tools/build_rules/go/tools:srcs",
+    ],
+)
+
+sh_test(
     name = "bazel_rules_test",
+    size = "large",
     srcs = ["bazel_rules_test.sh"],
     data = [":test-deps"],
 )
@@ -87,6 +108,15 @@ sh_test(
     name = "bazel_test_test",
     srcs = ["bazel_test_test.sh"],
     data = [":test-deps"],
+)
+
+sh_test(
+    name = "bazel_objc_test",
+    srcs = ["bazel_objc_test.sh"],
+    data = [
+        ":objc-deps",
+        ":test-deps",
+    ],
 )
 
 sh_test(
@@ -103,7 +133,12 @@ genrule(
     srcs = [
         "//src/java_tools/singlejar:srcs",
         "//src/main/protobuf:srcs",
-        "//src/main/java:srcs",
+        "//src/main/java/com/google/devtools/build/lib:srcs",
+        "//src/main/java/com/google/devtools/build/lib/actions:srcs",
+        "//src/main/java/com/google/devtools/build/lib/sandbox:srcs",
+        "//src/main/java/com/google/devtools/build/lib/rules/genquery:srcs",
+        "//src/main/java/com/google/devtools/build/lib/worker:srcs",
+        "//src/main/java/com/google/devtools/build/lib/standalone:srcs",
         "//src/tools/xcode-common:srcs",
         "//third_party:srcs",
     ],
@@ -115,10 +150,14 @@ sh_test(
     name = "bazel_docgen_test",
     size = "large",
     srcs = ["bazel_docgen_test.sh"],
-    data = [
-        ":doc-srcs",
-        ":test-deps",
-    ],
+    data = ["//src/main/java/com/google/devtools/build/lib:gen_buildencyclopedia"],
+)
+
+sh_test(
+    name = "external_correctness_test",
+    size = "large",
+    srcs = ["external_correctness_test.sh"],
+    data = [":test-deps"],
 )
 
 sh_test(
@@ -126,12 +165,11 @@ sh_test(
     size = "large",
     srcs = ["external_integration_test.sh"],
     data = [":test-deps"],
-    tags = ["manual"],  # flaky
 )
 
 sh_test(
     name = "git_repository_test",
-    size = "medium",
+    size = "large",
     srcs = ["git_repository_test.sh"],
     data = [
         ":test-deps",
@@ -145,6 +183,21 @@ sh_test(
     srcs = ["local_repository_test.sh"],
     data = [":test-deps"],
     shard_count = 3,
+)
+
+sh_test(
+    name = "external_skylark_load_test",
+    size = "large",
+    srcs = ["external_skylark_load_test.sh"],
+    data = [":test-deps"],
+    shard_count = 6,
+)
+
+sh_test(
+    name = "skylark_repository_test",
+    size = "large",
+    srcs = ["skylark_repository_test.sh"],
+    data = [":test-deps"],
 )
 
 sh_test(
@@ -168,18 +221,19 @@ sh_test(
 
 sh_test(
     name = "maven_test",
+    size = "medium",
     srcs = ["maven_test.sh"],
     data = [":test-deps"],
 )
 
 sh_test(
     name = "generate_workspace_test",
+    size = "large",
     srcs = ["generate_workspace_test.sh"],
     data = [
         ":test-deps",
         "//src/tools/generate_workspace",
     ],
-    tags = ["manual"],  # Flaky, see issue #432
 )
 
 sh_test(
@@ -190,20 +244,33 @@ sh_test(
 
 sh_test(
     name = "process_wrapper_test",
-    size = "large",
+    size = "small",
     srcs = ["process-wrapper_test.sh"],
-    data = [":test-deps"],
+    data = [
+        "test-setup.sh",
+        "testenv.sh",
+        "//src/main/tools:process-wrapper",
+        "//src/test/shell:bashunit",
+    ],
 )
 
 sh_test(
     name = "namespace_runner_test",
+    size = "large",
     srcs = ["namespace-runner_test.sh"],
     data = [":test-deps"],
 )
 
 sh_test(
     name = "bazel_sandboxing_test",
+    size = "large",
     srcs = ["bazel_sandboxing_test.sh"],
+    data = [":test-deps"],
+)
+
+sh_test(
+    name = "bazel_sandboxing_cpp_test",
+    srcs = ["bazel_sandboxing_cpp_test.sh"],
     data = [":test-deps"],
 )
 
@@ -211,11 +278,16 @@ sh_test(
     name = "bazel_worker_test",
     size = "large",
     srcs = ["bazel_worker_test.sh"],
-    data = [":test-deps"],
+    data = [
+        ":test-deps",
+        "//src/test/java/com/google/devtools/build/lib:ExampleWorker_deploy.jar",
+    ],
+    tags = ["manual"],
 )
 
 sh_test(
     name = "bazel_workspace_status_test",
+    size = "large",
     srcs = ["bazel_workspace_status_test.sh"],
     data = [":test-deps"],
 )

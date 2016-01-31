@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,9 +15,9 @@ package com.google.devtools.build.lib.rules.android;
 
 import static com.google.devtools.build.lib.packages.Attribute.ConfigurationTransition.HOST;
 import static com.google.devtools.build.lib.packages.Attribute.attr;
-import static com.google.devtools.build.lib.packages.Type.LABEL;
-import static com.google.devtools.build.lib.packages.Type.STRING;
-import static com.google.devtools.build.lib.packages.Type.STRING_LIST;
+import static com.google.devtools.build.lib.packages.BuildType.LABEL;
+import static com.google.devtools.build.lib.syntax.Type.STRING;
+import static com.google.devtools.build.lib.syntax.Type.STRING_LIST;
 
 import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
@@ -42,7 +42,6 @@ public final class AndroidBinaryOnlyRule implements RuleDefinition {
 //       and the default task affinity of an activity.
 //
 //       This overrides the value declared in the manifest.
-//       ${SYNOPSIS}
 //       <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
         .add(attr("application_id", STRING).undocumented("not ready for production use"))
 //       /* <!-- #BLAZE_RULE(android_binary).ATTRIBUTE(version_code) -->
@@ -53,8 +52,7 @@ public final class AndroidBinaryOnlyRule implements RuleDefinition {
 //       higher number.
 //       This overrides the value declared in the manifest.
 //
-//       Subject to <a href="#make_variables">"Make" variable</a> substitution.
-//       ${SYNOPSIS}
+//       Subject to <a href="make-variables.html">"Make" variable</a> substitution.
 //       Suggested practice is to declare a varrdef and reference it here so that a particular build
 //       invocation will be used to generate apks for release.
 //       <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
@@ -64,28 +62,26 @@ public final class AndroidBinaryOnlyRule implements RuleDefinition {
 //       users. The version_code attribute holds the significant version number used internally.
 //       This overrides the value declared in the manifest.
 //
-//       Subject to <a href="#make_variables">"Make" variable</a> substitution.
-//       ${SYNOPSIS}
+//       Subject to <a href="make-variables.html">"Make" variable</a> substitution.
 //       Suggested practice is to declare a varrdef and reference it here so that a particular build
 //       invocation will be used to generate apks for release.
 //       <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
         .add(attr("version_name", STRING).undocumented("not ready for production use"))
         /* <!-- #BLAZE_RULE(android_binary).ATTRIBUTE(nocompress_extensions) -->
         A list of file extension to leave uncompressed in apk.
-        ${SYNOPSIS}
         <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
         .add(attr("nocompress_extensions", STRING_LIST))
         /* <!-- #BLAZE_RULE(android_binary).ATTRIBUTE(resource_configuration_filters) -->
         A list of resource configuration filters, such 'en' that will limit the resources in the
         apk to only the ones in the 'en' configuration.
-        ${SYNOPSIS}
         <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
         .add(attr("resource_configuration_filters", STRING_LIST))
         /* <!-- #BLAZE_RULE(android_binary).ATTRIBUTE(densities) -->
         Densities to filter for when building the apk.
-        ${SYNOPSIS}
         This will strip out raster drawable resources that would not be loaded by a device with
-        the specified screen densities, to reduce APK size.
+        the specified screen densities, to reduce APK size. A corresponding compatible-screens
+        section will also be added to the manifest if it does not already contain a superset
+        listing.
         <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
         .add(attr("densities", STRING_LIST))
         .add(attr("$android_manifest_merge_tool", LABEL)
@@ -95,7 +91,6 @@ public final class AndroidBinaryOnlyRule implements RuleDefinition {
 
         /* <!-- #BLAZE_RULE(android_binary).ATTRIBUTE(multidex) -->
         Whether to split code into multiple dex files.
-        ${SYNOPSIS}
         Possible values:
         <ul>
           <li><code>native</code>: Split code into multiple dex files when the

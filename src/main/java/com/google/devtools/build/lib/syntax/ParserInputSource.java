@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -49,16 +49,8 @@ public abstract class ParserInputSource {
   }
 
   public static ParserInputSource create(Path path, long fileSize) throws IOException {
-    if (fileSize > Integer.MAX_VALUE) {
-      throw new IOException("Cannot parse file with size larger than 2GB");
-    }
-    char[] content = FileSystemUtils.readContentAsLatin1(path);
-    if (fileSize > content.length) {
-      // This assertion is to help diagnose problems arising from the
-      // filesystem;  see bugs and #859334 and #920195.
-      throw new IOException("Unexpected short read from file '" + path
-          + "' (expected " + fileSize + ", got " + content.length + " bytes)");
-    }
+    byte[] bytes = FileSystemUtils.readWithKnownFileSize(path, fileSize);
+    char[] content = FileSystemUtils.convertFromLatin1(bytes);
     return create(content, path.asFragment());
   }
 

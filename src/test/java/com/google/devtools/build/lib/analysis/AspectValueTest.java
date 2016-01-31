@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,13 +16,13 @@ package com.google.devtools.build.lib.analysis;
 import com.google.common.testing.EqualsTester;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.util.AnalysisTestCase;
-import com.google.devtools.build.lib.analysis.util.TestAspects;
+import com.google.devtools.build.lib.analysis.util.TestAspects.AttributeAspect;
+import com.google.devtools.build.lib.analysis.util.TestAspects.ExtraAttributeAspect;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.AspectParameters;
+import com.google.devtools.build.lib.packages.NativeAspectClass;
 import com.google.devtools.build.lib.skyframe.AspectValue;
-import com.google.devtools.build.lib.syntax.Label;
 
-import org.junit.After;
-import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -32,17 +32,6 @@ import org.junit.runners.JUnit4;
  */
 @RunWith(JUnit4.class)
 public class AspectValueTest extends AnalysisTestCase {
-  @Override
-  @Before
-  public void setUp() throws Exception {
-    super.setUp();
-  }
-
-  @Override
-  @After
-  public void tearDown() throws Exception {
-    super.tearDown();
-  }
 
   @Test
   public void equality() throws Exception {
@@ -58,8 +47,8 @@ public class AspectValueTest extends AnalysisTestCase {
     AspectParameters i2 = new AspectParameters.Builder()
         .addAttribute("foo", "baz")
         .build();
-    Class<? extends ConfiguredAspectFactory> a1 = TestAspects.AttributeAspect.class;
-    Class<? extends ConfiguredAspectFactory> a2 = TestAspects.ExtraAttributeAspect.class;
+    NativeAspectClass a1 = new NativeAspectClass(AttributeAspect.class);
+    NativeAspectClass a2 = new NativeAspectClass(ExtraAttributeAspect.class);
 
     new EqualsTester()
         .addEqualityGroup(AspectValue.key(l1, c1, a1, AspectParameters.EMPTY),

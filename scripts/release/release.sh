@@ -1,6 +1,6 @@
 #!/bin/bash -eu
 
-# Copyright 2015 Google Inc. All rights reserved.
+# Copyright 2015 The Bazel Authors. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@
 set -eu
 
 # Repositories to push the release branch and the release tag.
-: ${RELEASE_REPOSITORIES:="https://github.com/bazelbuild/bazel"}
+: ${RELEASE_REPOSITORIES:="git@github.com:bazelbuild/bazel"}
 
 # Repositories to push the master branch
 : ${MASTER_REPOSITORIES:="https://bazel.googlesource.com/bazel"}
@@ -112,6 +112,7 @@ ${relnotes}
 EOF
 
   if [ -f "${changelog_path}" ]; then
+    echo >>${tmpfile}
     cat "${changelog_path}" >>${tmpfile}
   fi
   cat ${tmpfile} > ${changelog_path}
@@ -124,7 +125,7 @@ ${version_info}
 
 ${relnotes}
 EOF
-  git commit -F ${tmpfile} --no-edit --author "${RELEASE_AUTHOR}"
+  git commit --no-verify -F ${tmpfile} --no-edit --author "${RELEASE_AUTHOR}"
 }
 
 function apply_cherry_picks() {
@@ -245,7 +246,7 @@ function do_release() {
     trap 'rm -f ${tmpfile}' EXIT
     git_commit_msg ${branch} >${tmpfile}
     git add ${changelog_path}
-    git commit -F ${tmpfile} --no-edit --author "${RELEASE_AUTHOR}"
+    git commit --no-verify -F ${tmpfile} --no-edit --author "${RELEASE_AUTHOR}"
     rm -f ${tmpfile}
     trap - EXIT
 

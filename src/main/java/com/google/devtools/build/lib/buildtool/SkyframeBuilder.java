@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,6 @@
 package com.google.devtools.build.lib.buildtool;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Preconditions;
 import com.google.common.base.Supplier;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
@@ -35,6 +34,8 @@ import com.google.devtools.build.lib.actions.TestExecException;
 import com.google.devtools.build.lib.analysis.AspectCompleteEvent;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.TargetCompleteEvent;
+import com.google.devtools.build.lib.events.EventHandler;
+import com.google.devtools.build.lib.events.Reporter;
 import com.google.devtools.build.lib.packages.BuildFileNotFoundException;
 import com.google.devtools.build.lib.rules.test.TestProvider;
 import com.google.devtools.build.lib.skyframe.ActionExecutionInactivityWatchdog;
@@ -49,6 +50,8 @@ import com.google.devtools.build.lib.skyframe.TargetCompletionValue;
 import com.google.devtools.build.lib.util.AbruptExitException;
 import com.google.devtools.build.lib.util.BlazeClock;
 import com.google.devtools.build.lib.util.LoggingUtil;
+import com.google.devtools.build.lib.util.Preconditions;
+import com.google.devtools.build.lib.vfs.ModifiedFileSet;
 import com.google.devtools.build.skyframe.CycleInfo;
 import com.google.devtools.build.skyframe.ErrorInfo;
 import com.google.devtools.build.skyframe.EvaluationProgressReceiver;
@@ -77,26 +80,30 @@ public class SkyframeBuilder implements Builder {
   private final SkyframeExecutor skyframeExecutor;
   private final boolean keepGoing;
   private final int numJobs;
-  private final boolean checkOutputFiles;
+  private final boolean finalizeActionsToOutputService;
+  private final ModifiedFileSet modifiedOutputFiles;
   private final ActionInputFileCache fileCache;
   private final ActionCacheChecker actionCacheChecker;
   private final int progressReportInterval;
 
   @VisibleForTesting
   public SkyframeBuilder(SkyframeExecutor skyframeExecutor, ActionCacheChecker actionCacheChecker,
-      boolean keepGoing, int numJobs, boolean checkOutputFiles,
-      ActionInputFileCache fileCache, int progressReportInterval) {
+      boolean keepGoing, int numJobs, ModifiedFileSet modifiedOutputFiles,
+      boolean finalizeActionsToOutputService, ActionInputFileCache fileCache,
+      int progressReportInterval) {
     this.skyframeExecutor = skyframeExecutor;
     this.actionCacheChecker = actionCacheChecker;
     this.keepGoing = keepGoing;
     this.numJobs = numJobs;
-    this.checkOutputFiles = checkOutputFiles;
+    this.finalizeActionsToOutputService = finalizeActionsToOutputService;
+    this.modifiedOutputFiles = modifiedOutputFiles;
     this.fileCache = fileCache;
     this.progressReportInterval = progressReportInterval;
   }
 
   @Override
   public void buildArtifacts(
+      Reporter reporter,
       Set<Artifact> artifacts,
       Set<ConfiguredTarget> parallelTests,
       Set<ConfiguredTarget> exclusiveTests,
@@ -107,7 +114,7 @@ public class SkyframeBuilder implements Builder {
       boolean explain,
       @Nullable Range<Long> lastExecutionTimeRange)
       throws BuildFailedException, AbruptExitException, TestExecException, InterruptedException {
-    skyframeExecutor.prepareExecution(checkOutputFiles, lastExecutionTimeRange);
+    skyframeExecutor.prepareExecution(modifiedOutputFiles, lastExecutionTimeRange);
     skyframeExecutor.setFileCache(fileCache);
     // Note that executionProgressReceiver accesses builtTargets concurrently (after wrapping in a
     // synchronized collection), so unsynchronized access to this variable is unsafe while it runs.
@@ -120,7 +127,7 @@ public class SkyframeBuilder implements Builder {
     EvaluationResult<?> result;
 
     ActionExecutionStatusReporter statusReporter = ActionExecutionStatusReporter.create(
-        skyframeExecutor.getReporter(), executor, skyframeExecutor.getEventBus());
+        reporter, executor, skyframeExecutor.getEventBus());
 
     AtomicBoolean isBuildingExclusiveArtifacts = new AtomicBoolean(false);
     ActionExecutionInactivityWatchdog watchdog = new ActionExecutionInactivityWatchdog(
@@ -135,6 +142,7 @@ public class SkyframeBuilder implements Builder {
     try {
       result =
           skyframeExecutor.buildArtifacts(
+              reporter,
               executor,
               artifacts,
               targetsToBuild,
@@ -143,11 +151,12 @@ public class SkyframeBuilder implements Builder {
               /*exclusiveTesting=*/ false,
               keepGoing,
               explain,
+              finalizeActionsToOutputService,
               numJobs,
               actionCacheChecker,
               executionProgressReceiver);
       // progressReceiver is finished, so unsynchronized access to builtTargets is now safe.
-      success = processResult(result, keepGoing, skyframeExecutor);
+      success = processResult(reporter, result, keepGoing, skyframeExecutor);
 
       Preconditions.checkState(
           !success
@@ -168,6 +177,7 @@ public class SkyframeBuilder implements Builder {
         // built and then the build being interrupted.
         result =
             skyframeExecutor.buildArtifacts(
+                reporter,
                 executor,
                 ImmutableSet.<Artifact>of(),
                 targetsToBuild,
@@ -176,10 +186,11 @@ public class SkyframeBuilder implements Builder {
                 true,
                 keepGoing,
                 explain,
+                finalizeActionsToOutputService,
                 numJobs,
                 actionCacheChecker,
                 null);
-        boolean exclusiveSuccess = processResult(result, keepGoing, skyframeExecutor);
+        boolean exclusiveSuccess = processResult(reporter, result, keepGoing, skyframeExecutor);
         Preconditions.checkState(!exclusiveSuccess || !result.keyNames().isEmpty(),
             "Build reported as successful but test %s not executed: %s",
             exclusiveTest, result);
@@ -197,39 +208,39 @@ public class SkyframeBuilder implements Builder {
     }
   }
 
-  private static boolean resultHasCatastrophicError(EvaluationResult<?> result) {
-    for (ErrorInfo errorInfo : result.errorMap().values()) {
-      if (errorInfo.isCatastrophic()) {
-        return true;
-      }
-    }
-    // An unreported catastrophe manifests with hasError() being true but no errors visible.
-    return result.hasError() && result.errorMap().isEmpty();
-  }
-
   /**
    * Process the Skyframe update, taking into account the keepGoing setting.
    *
    * <p>Returns false if the update() failed, but we should continue. Returns true on success.
    * Throws on fail-fast failures.
    */
-  private static boolean processResult(EvaluationResult<?> result, boolean keepGoing,
-      SkyframeExecutor skyframeExecutor) throws BuildFailedException, TestExecException {
+  private static boolean processResult(EventHandler eventHandler, EvaluationResult<?> result,
+      boolean keepGoing, SkyframeExecutor skyframeExecutor)
+          throws BuildFailedException, TestExecException {
     if (result.hasError()) {
-      boolean hasCycles = false;
       for (Map.Entry<SkyKey, ErrorInfo> entry : result.errorMap().entrySet()) {
         Iterable<CycleInfo> cycles = entry.getValue().getCycleInfo();
-        skyframeExecutor.reportCycles(cycles, entry.getKey());
-        hasCycles |= !Iterables.isEmpty(cycles);
+        skyframeExecutor.reportCycles(eventHandler, cycles, entry.getKey());
       }
-      if (keepGoing && !resultHasCatastrophicError(result)) {
+
+      if (result.getCatastrophe() != null) {
+        rethrow(result.getCatastrophe());
+      }
+      if (keepGoing) {
+        // keepGoing doesn't throw if there were just ordinary errors.
         return false;
       }
-      if (hasCycles || result.errorMap().isEmpty()) {
-        // error map may be empty in the case of a catastrophe.
-        throw new BuildFailedException();
+      ErrorInfo errorInfo = Preconditions.checkNotNull(result.getError(), result);
+      Exception exception = errorInfo.getException();
+      if (exception == null) {
+        Preconditions.checkState(!Iterables.isEmpty(errorInfo.getCycleInfo()), errorInfo);
+        // If a keepGoing=false build found a cycle, that means there were no other errors thrown
+        // during evaluation (otherwise, it wouldn't have bothered to find a cycle). So the best
+        // we can do is throw a generic build failure exception, since we've already reported the
+        // cycles above.
+        throw new BuildFailedException(null, /*hasCatastrophe=*/ false);
       } else {
-        rethrow(Preconditions.checkNotNull(result.getError().getException()));
+        rethrow(exception);
       }
     }
     return true;
@@ -254,7 +265,8 @@ public class SkyframeBuilder implements Builder {
           actionExecutionCause.isCatastrophe(),
           actionExecutionCause.getAction(),
           actionExecutionCause.getRootCauses(),
-          /*errorAlreadyShown=*/ !actionExecutionCause.showError());
+          /*errorAlreadyShown=*/ !actionExecutionCause.showError(),
+          actionExecutionCause.getExitCode());
     } else if (cause instanceof MissingInputFileException) {
       throw new BuildFailedException(cause.getMessage());
     } else if (cause instanceof BuildFileNotFoundException) {

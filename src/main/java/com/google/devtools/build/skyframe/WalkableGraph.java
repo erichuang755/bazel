@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@
 // limitations under the License.
 package com.google.devtools.build.skyframe;
 
+import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import com.google.devtools.build.lib.events.EventHandler;
 
 import java.util.Collection;
@@ -24,6 +25,7 @@ import javax.annotation.Nullable;
  * Read-only graph that exposes the dependents, dependencies (reverse dependents), and value and
  * exception (if any) of a given node.
  */
+@ThreadSafe
 public interface WalkableGraph {
 
   /**
@@ -77,7 +79,13 @@ public interface WalkableGraph {
 
   /** Provides a WalkableGraph on demand after preparing it. */
   interface WalkableGraphFactory {
-    EvaluationResult<SkyValue> prepareAndGet(Collection<String> roots,
+    EvaluationResult<SkyValue> prepareAndGet(Collection<String> roots, String offset,
         int numThreads, EventHandler eventHandler) throws InterruptedException;
+
+    /** Consumers of the graph given by {@link #prepareAndGet} may call this after they are done. */
+    void afterUse(WalkableGraph walkableGraph);
+
+    /** Returns the {@link SkyKey} that defines this universe. */
+    SkyKey getUniverseKey(Collection<String> roots, String offset);
   }
 }

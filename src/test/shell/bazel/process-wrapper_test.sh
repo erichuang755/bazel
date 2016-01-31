@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Copyright 2015 Google Inc. All rights reserved.
+# Copyright 2015 The Bazel Authors. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,10 +18,10 @@
 #
 
 # Load test environment
-source $(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-setup.sh \
-  || { echo "test-setup.sh not found!" >&2; exit 1; }
 
-readonly WRAPPER="${bazel_data}/src/main/tools/process-wrapper"
+source $(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/testenv.sh \
+  || { echo "testenv.sh not found!" >&2; exit 1; }
+
 readonly OUT_DIR="${TEST_TMPDIR}/out"
 readonly OUT="${OUT_DIR}/outfile"
 readonly ERR="${OUT_DIR}/errfile"
@@ -41,49 +41,63 @@ function assert_output() {
 }
 
 function test_basic_functionality() {
-  $WRAPPER -1 0 $OUT $ERR /bin/echo hi there || fail
+  $process_wrapper -1 0 $OUT $ERR /bin/echo hi there &> $TEST_log || fail
   assert_output "hi there" ""
 }
 
 function test_to_stderr() {
-  $WRAPPER -1 0 $OUT $ERR /bin/bash -c "/bin/echo hi there >&2" || fail
+  $process_wrapper -1 0 $OUT $ERR /bin/bash -c "/bin/echo hi there >&2" &> $TEST_log || fail
   assert_output "" "hi there"
 }
 
 function test_exit_code() {
-  $WRAPPER -1 0 $OUT $ERR /bin/bash -c "exit 71" || code=$?
+  local code=0
+  $process_wrapper -1 0 $OUT $ERR /bin/bash -c "exit 71" &> $TEST_log || code=$?
   assert_equals 71 "$code"
 }
 
 function test_signal_death() {
-  $WRAPPER -1 0 $OUT $ERR /bin/bash -c 'kill -ABRT $$' || code=$?
+  local code=0
+  $process_wrapper -1 0 $OUT $ERR /bin/bash -c 'kill -ABRT $$' &> $TEST_log || code=$?
   assert_equals 134 "$code" # SIGNAL_BASE + SIGABRT = 128 + 6
 }
 
 function test_signal_catcher() {
-  $WRAPPER 2 3 $OUT $ERR /bin/bash -c \
-    'trap "echo later; exit 0" SIGINT SIGTERM SIGALRM; sleep 1000' || code=$?
+  local code=0
+  $process_wrapper 1 2 $OUT $ERR /bin/bash -c \
+    'trap "echo later; exit 0" SIGINT SIGTERM SIGALRM; sleep 10' &> $TEST_log || code=$?
   assert_equals 142 "$code" # SIGNAL_BASE + SIGALRM = 128 + 14
   assert_stdout "later"
 }
 
 function test_basic_timeout() {
-  $WRAPPER 3 3 $OUT $ERR /bin/bash -c "echo before; sleep 1000; echo after" && fail
+  $process_wrapper 1 2 $OUT $ERR /bin/bash -c "echo before; sleep 10; echo after" &> $TEST_log && fail
   assert_stdout "before"
 }
 
 function test_timeout_grace() {
-  $WRAPPER 2 3 $OUT $ERR /bin/bash -c \
-    'trap "echo -n before; sleep 1; echo -n after; exit 0" SIGINT SIGTERM SIGALRM; sleep 1000' || code=$?
+  local code=0
+  $process_wrapper 1 2 $OUT $ERR /bin/bash -c \
+    'trap "echo -n before; sleep 1; echo after; exit 0" SIGINT SIGTERM SIGALRM; sleep 10' \
+    &> $TEST_log || code=$?
   assert_equals 142 "$code" # SIGNAL_BASE + SIGALRM = 128 + 14
   assert_stdout "beforeafter"
 }
 
 function test_timeout_kill() {
-  $WRAPPER 2 3 $OUT $ERR /bin/bash -c \
-    'trap "echo before; sleep 1000; echo after; exit 0" SIGINT SIGTERM SIGALRM; sleep 1000' || code=$?
+  local code=0
+  $process_wrapper 1 2 $OUT $ERR /bin/bash -c \
+    'trap "echo before; sleep 10; echo after; exit 0" SIGINT SIGTERM SIGALRM; sleep 10' \
+    &> $TEST_log || code=$?
   assert_equals 142 "$code" # SIGNAL_BASE + SIGALRM = 128 + 14
   assert_stdout "before"
+}
+
+function test_execvp_error_message() {
+  local code=0
+  $process_wrapper -1 0 $OUT $ERR /bin/notexisting &> $TEST_log || code=$?
+  assert_equals 1 "$code"
+  assert_contains "execvp(\"/bin/notexisting\", ...): No such file or directory" "$ERR"
 }
 
 run_suite "process-wrapper"

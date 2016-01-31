@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Copyright 2015 Google Inc. All rights reserved.
+# Copyright 2015 The Bazel Authors. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -52,6 +52,7 @@ cc_library(
 cc_library(
     name = "jni_dep",
     srcs = ["jni_dep.cc"],
+    hdrs = ["jni_dep.h"],
 )
 
 EOF

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright 2015 Google Inc. All rights reserved.
+# Copyright 2015 The Bazel Authors. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,6 +19,13 @@ exec 2>&1
 
 # Executing the test log will page it.
 echo 'exec ${PAGER:-/usr/bin/less} "$0" || exit 1'
+
+# Tell googletest about Bazel sharding.
+if [[ -n "${TEST_TOTAL_SHARDS+x}" ]] && ((TEST_TOTAL_SHARDS != 0)); then
+  export GTEST_SHARD_INDEX="${TEST_SHARD_INDEX}"
+  export GTEST_TOTAL_SHARDS="${TEST_TOTAL_SHARDS}"
+fi
+export GTEST_TMP_DIR="${TEST_TMPDIR}"
 
 DIR="$TEST_SRCDIR"
 
@@ -41,4 +48,24 @@ echo "--------------------------------------------------------------------------
 # If the test is at the top of the tree, we have to add '.' to $PATH,
 PATH=".:$PATH"
 
-"$@"
+exitCode=0
+"$@" || exitCode=$?
+
+if [ -n "${XML_OUTPUT_FILE-}" -a ! -f "${XML_OUTPUT_FILE-}" ]; then
+  # Create a default XML output file if the test runner hasn't generated it
+  if (( $exitCode != 0 )); then
+    errors=1
+    error_msg="<error message=\"exited with error code $exitCode\"/></error>"
+  else
+    errors=0
+    error_msg=
+  fi
+  cat <<EOF >${XML_OUTPUT_FILE}
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="$1" tests="1" failure="0" errors="$errors">
+  <testcase name="$1" status="run">$error_msg</testcase>
+</testsuites>
+EOF
+fi
+
+exit $exitCode

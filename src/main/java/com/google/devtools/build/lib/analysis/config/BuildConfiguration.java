@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,7 +16,6 @@ package com.google.devtools.build.lib.analysis.config;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Joiner;
-import com.google.common.base.Preconditions;
 import com.google.common.base.Verify;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ClassToInstanceMap;
@@ -24,22 +23,27 @@ import com.google.common.collect.ImmutableCollection;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.ImmutableSortedMap;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.ListMultimap;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Multimap;
 import com.google.common.collect.MutableClassToInstanceMap;
+import com.google.devtools.build.lib.Constants;
 import com.google.devtools.build.lib.actions.ArtifactFactory;
 import com.google.devtools.build.lib.actions.PackageRootResolver;
 import com.google.devtools.build.lib.actions.Root;
-import com.google.devtools.build.lib.analysis.AspectWithParameters;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
-import com.google.devtools.build.lib.analysis.DependencyResolver;
+import com.google.devtools.build.lib.analysis.Dependency;
+import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.ViewCreationFailedException;
 import com.google.devtools.build.lib.analysis.config.BuildConfigurationCollection.Transitions;
+import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
+import com.google.devtools.build.lib.packages.Aspect;
 import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.Attribute.Configurator;
 import com.google.devtools.build.lib.packages.Attribute.SplitTransition;
@@ -51,14 +55,12 @@ import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.packages.RuleClassProvider;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.rules.test.TestActionBuilder;
-import com.google.devtools.build.lib.syntax.Label;
-import com.google.devtools.build.lib.syntax.Label.SyntaxException;
-import com.google.devtools.build.lib.syntax.SkylarkCallable;
-import com.google.devtools.build.lib.syntax.SkylarkModule;
-import com.google.devtools.build.lib.syntax.SkylarkModuleNameResolver;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
 import com.google.devtools.build.lib.util.CPU;
 import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.util.OS;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.util.RegexFilter;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -78,12 +80,14 @@ import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Queue;
 import java.util.Set;
 import java.util.TreeMap;
@@ -270,6 +274,27 @@ public final class BuildConfiguration {
      */
     public void declareSkyframeDependencies(Environment env) {
     }
+
+    /**
+     * Return set of features enabled by this configuration.
+     */
+    public ImmutableSet<String> configurationEnabledFeatures(RuleContext ruleContext) {
+      return ImmutableSet.of();
+    }
+  }
+
+  private static final Label convertLabel(String input) throws OptionsParsingException {
+    try {
+      // Check if the input starts with '/'. We don't check for "//" so that
+      // we get a better error message if the user accidentally tries to use
+      // an absolute path (starting with '/') for a label.
+      if (!input.startsWith("/") && !input.startsWith("@")) {
+        input = "//" + input;
+      }
+      return Label.parseAbsolute(input);
+    } catch (LabelSyntaxException e) {
+      throw new OptionsParsingException(e.getMessage());
+    }
   }
 
   /**
@@ -278,17 +303,30 @@ public final class BuildConfiguration {
   public static class LabelConverter implements Converter<Label> {
     @Override
     public Label convert(String input) throws OptionsParsingException {
-      try {
-        // Check if the input starts with '/'. We don't check for "//" so that
-        // we get a better error message if the user accidentally tries to use
-        // an absolute path (starting with '/') for a label.
-        if (!input.startsWith("/") && !input.startsWith("@")) {
-          input = "//" + input;
-        }
-        return Label.parseAbsolute(input);
-      } catch (SyntaxException e) {
-        throw new OptionsParsingException(e.getMessage());
-      }
+      return convertLabel(input);
+    }
+
+    @Override
+    public String getTypeDescription() {
+      return "a build target label";
+    }
+  }
+
+  /**
+   * A label converter that returns a default value if the input string is empty.
+   */
+  public static class DefaultLabelConverter implements Converter<Label> {
+    private final Label defaultValue;
+
+    protected DefaultLabelConverter(String defaultValue) {
+      this.defaultValue = defaultValue.equals("null")
+          ? null
+          : Label.parseAbsoluteUnchecked(defaultValue);
+    }
+
+    @Override
+    public Label convert(String input) throws OptionsParsingException {
+      return input.isEmpty() ? defaultValue : convertLabel(input);
     }
 
     @Override
@@ -502,7 +540,7 @@ public final class BuildConfiguration {
     public List<Map.Entry<String, String>> pluginCoptList;
 
     @Option(name = "stamp",
-        defaultValue = "true",
+        defaultValue = "false",
         category = "semantics",
         help = "Stamp binaries with the date, username, hostname, workspace information, etc.")
     public boolean stampBinaries;
@@ -798,11 +836,15 @@ public final class BuildConfiguration {
     )
     public List<Label> targetEnvironments;
 
-    @Option(name = "objc_gcov_binary",
-        converter = LabelConverter.class,
-        defaultValue = "//third_party/gcov:gcov_for_xcode",
-        category = "undocumented")
-    public Label objcGcovBinary;
+    /** Converter for labels in the @bazel_tools repository. The @Options' defaultValues can't
+     * prepend TOOLS_REPOSITORY, unfortunately, because then the compiler thinks they're not
+     * constant. */
+    public static class ToolsLabelConverter extends LabelConverter {
+      @Override
+      public Label convert(String input) throws OptionsParsingException {
+        return convertLabel(Constants.TOOLS_REPOSITORY + input);
+      }
+    }
 
     @Option(name = "experimental_dynamic_configs",
         defaultValue = "false",
@@ -865,9 +907,6 @@ public final class BuildConfiguration {
       if ((runUnder != null) && (runUnder.getLabel() != null)) {
         labelMap.put("RunUnder", runUnder.getLabel());
       }
-      if (collectCodeCoverage) {
-        labelMap.put("objc_gcov", objcGcovBinary);
-      }
     }
   }
 
@@ -898,6 +937,29 @@ public final class BuildConfiguration {
       this.includeDirectory = Root.asDerivedRoot(execRoot,
           outputDir.getRelative(BlazeDirectories.RELATIVE_INCLUDE_DIR));
       this.middlemanDirectory = Root.middlemanRoot(execRoot, outputDir);
+    }
+
+    @Override
+    public boolean equals(Object o) {
+      if (o == this) {
+        return true;
+      }
+      if (!(o instanceof OutputRoots)) {
+        return false;
+      }
+      OutputRoots other = (OutputRoots) o;
+      return outputDirectory.equals(other.outputDirectory)
+          && binDirectory.equals(other.binDirectory)
+          && genfilesDirectory.equals(other.genfilesDirectory)
+          && coverageMetadataDirectory.equals(other.coverageMetadataDirectory)
+          && testLogsDirectory.equals(other.testLogsDirectory)
+          && includeDirectory.equals(other.includeDirectory);
+    }
+
+    @Override
+    public int hashCode() {
+      return Objects.hash(outputDirectory, binDirectory, genfilesDirectory,
+          coverageMetadataDirectory, testLogsDirectory, includeDirectory);
     }
   }
 
@@ -967,7 +1029,7 @@ public final class BuildConfiguration {
    */
   private final ImmutableMap<String, String> globalMakeEnv;
 
-  private final ImmutableMap<String, String> defaultShellEnvironment;
+  private final ImmutableMap<String, String> localShellEnvironment;
   private final BuildOptions buildOptions;
   private final Options options;
 
@@ -1013,6 +1075,29 @@ public final class BuildConfiguration {
    */
   private final Map<String, OptionDetails> transitiveOptionsMap;
 
+  /**
+   * Returns true if this configuration is semantically equal to the other, with
+   * the possible exception that the other has fewer fragments.
+   *
+   * <p>This is useful for dynamic configurations - as the same configuration gets "trimmed" while
+   * going down a dependency chain, it's still the same configuration but loses some of its
+   * fragments. So we need a more nuanced concept of "equality" than simple reference equality.
+   */
+  public boolean equalsOrIsSupersetOf(BuildConfiguration other) {
+    return this.equals(other)
+        || (other != null
+                && outputRoots.equals(other.outputRoots)
+                && actionsEnabled == other.actionsEnabled
+                && fragments.values().containsAll(other.fragments.values())
+                && buildOptions.getOptions().containsAll(other.buildOptions.getOptions()));
+  }
+
+  /**
+   * Returns map of all the fragments for this configuration.
+   */
+  public ImmutableMap<Class<? extends Fragment>, Fragment> getAllFragments() {
+    return fragments;
+  }
 
   /**
    * Validates the options for this BuildConfiguration. Issues warnings for the
@@ -1050,6 +1135,11 @@ public final class BuildConfiguration {
           + "benefit from sharding certain tests. Please don't keep this option in your "
           + ".blazerc or continuous build"));
     }
+
+    if (options.useDynamicConfigurations && !options.useDistinctHostConfiguration) {
+      reporter.handle(Event.error(
+          "--nodistinct_host_configuration does not currently work with dynamic configurations"));
+    }
   }
 
   private ImmutableMap<String, String> setupShellEnvironment() {
@@ -1059,6 +1149,18 @@ public final class BuildConfiguration {
     }
     return builder.build();
   }
+
+  /**
+   * Sorts fragments by class name. This produces a stable order which, e.g., facilitates
+   * consistent output from buildMneumonic.
+   */
+  private final static Comparator lexicalFragmentSorter =
+      new Comparator<Class<? extends Fragment>>() {
+        @Override
+        public int compare(Class<? extends Fragment> o1, Class<? extends Fragment> o2) {
+          return o1.getName().compareTo(o2.getName());
+        }
+      };
 
   /**
    * Constructs a new BuildConfiguration instance.
@@ -1081,9 +1183,9 @@ public final class BuildConfiguration {
       boolean actionsDisabled) {
     Preconditions.checkState(outputRoots == null ^ directories == null);
     this.actionsEnabled = !actionsDisabled;
-    this.fragments = ImmutableMap.copyOf(fragmentsMap);
+    this.fragments = ImmutableSortedMap.copyOf(fragmentsMap, lexicalFragmentSorter);
 
-    this.skylarkVisibleFragments = buildIndexOfVisibleFragments();
+    this.skylarkVisibleFragments = buildIndexOfSkylarkVisibleFragments();
     
     this.buildOptions = buildOptions;
     this.options = buildOptions.get(Options.class);
@@ -1120,7 +1222,7 @@ public final class BuildConfiguration {
     this.coverageReportGeneratorLabels = coverageReportGeneratorLabelsBuilder.build();
     this.gcovLabels = gcovLabelsBuilder.build();
 
-    this.defaultShellEnvironment = setupShellEnvironment();
+    this.localShellEnvironment = setupShellEnvironment();
 
     this.transitiveOptionsMap = computeOptionsMap(buildOptions, fragments.values());
 
@@ -1195,12 +1297,11 @@ public final class BuildConfiguration {
 
 
 
-  private ImmutableMap<String, Class<? extends Fragment>> buildIndexOfVisibleFragments() {
+  private ImmutableMap<String, Class<? extends Fragment>> buildIndexOfSkylarkVisibleFragments() {
     ImmutableMap.Builder<String, Class<? extends Fragment>> builder = ImmutableMap.builder();
-    SkylarkModuleNameResolver resolver = new SkylarkModuleNameResolver();
 
     for (Class<? extends Fragment> fragmentClass : fragments.keySet()) {
-      String name = resolver.resolveName(fragmentClass);
+      String name = SkylarkModule.Resolver.resolveName(fragmentClass);
       if (name != null) {
         builder.put(name, fragmentClass);
       }
@@ -1392,17 +1493,16 @@ public final class BuildConfiguration {
     Transitions getCurrentTransitions();
 
     /**
-     * Populates a {@link com.google.devtools.build.lib.analysis.DependencyResolver.Dependency}
+     * Populates a {@link com.google.devtools.build.lib.analysis.Dependency}
      * for each configuration represented by this instance.
      * TODO(bazel-team): this is a really ugly reverse dependency: factor this away.
      */
-    Iterable<DependencyResolver.Dependency> getDependencies(Label label,
-        ImmutableSet<AspectWithParameters> aspects);
+    Iterable<Dependency> getDependencies(Label label, ImmutableSet<Aspect> aspects);
   }
 
   /**
    * Transition applier for static configurations. This implementation populates
-   * {@link com.google.devtools.build.lib.analysis.DependencyResolver.Dependency} objects with
+   * {@link com.google.devtools.build.lib.analysis.Dependency} objects with
    * actual configurations.
    *
    * <p>Does not support split transitions (see {@link SplittableTransitionApplier}).
@@ -1470,16 +1570,17 @@ public final class BuildConfiguration {
     }
 
     @Override
-    public Iterable<DependencyResolver.Dependency> getDependencies(Label label,
-        ImmutableSet<AspectWithParameters> aspects) {
+    public Iterable<Dependency> getDependencies(Label label, ImmutableSet<Aspect> aspects) {
       return ImmutableList.of(
-          new DependencyResolver.Dependency(label, currentConfiguration, aspects));
+          currentConfiguration != null
+              ? Dependency.withConfigurationAndAspects(label, currentConfiguration, aspects)
+              : Dependency.withNullConfiguration(label));
     }
   }
 
   /**
    * Transition applier for dynamic configurations. This implementation populates
-   * {@link com.google.devtools.build.lib.analysis.DependencyResolver.Dependency} objects with
+   * {@link com.google.devtools.build.lib.analysis.Dependency} objects with
    * transition definitions that the caller subsequently creates configurations out of.
    *
    * <p>Does not support split transitions (see {@link SplittableTransitionApplier}).
@@ -1571,9 +1672,10 @@ public final class BuildConfiguration {
     }
 
     @Override
-    public Iterable<DependencyResolver.Dependency> getDependencies(Label label,
-        ImmutableSet<AspectWithParameters> aspects) {
-      return ImmutableList.of(new DependencyResolver.Dependency(label, transition, aspects));
+    public Iterable<Dependency> getDependencies(
+        Label label, ImmutableSet<Aspect> aspects) {
+      return ImmutableList.of(
+          Dependency.withTransitionAndAspects(label, transition, aspects));
     }
   }
 
@@ -1638,9 +1740,8 @@ public final class BuildConfiguration {
 
 
     @Override
-    public Iterable<DependencyResolver.Dependency> getDependencies(Label label,
-        ImmutableSet<AspectWithParameters> aspects) {
-      ImmutableList.Builder<DependencyResolver.Dependency> builder = ImmutableList.builder();
+    public Iterable<Dependency> getDependencies(Label label, ImmutableSet<Aspect> aspects) {
+      ImmutableList.Builder<Dependency> builder = ImmutableList.builder();
       for (TransitionApplier applier : appliers) {
         builder.addAll(applier.getDependencies(label, aspects));
       }
@@ -1705,9 +1806,9 @@ public final class BuildConfiguration {
     // declares a host configuration transition). We want to explicitly exclude configuration labels
     // from these transitions, since their *purpose* is to do computation on the owning
     // rule's configuration.
-    // TODO(bazel-team): implement this more elegantly. This is far too hackish. Specifically:
-    // don't reference the rule name explicitly and don't require special-casing here.
-    if (toTarget instanceof Rule && ((Rule) toTarget).getRuleClass().equals("config_setting")) {
+    // TODO(bazel-team): don't require special casing here. This is far too hackish.
+    if (toTarget instanceof Rule
+        && ((Rule) toTarget).getRuleClass().equals(ConfigRuleClasses.ConfigSettingRule.RULE_NAME)) {
       transitionApplier.applyTransition(Attribute.ConfigurationTransition.NONE); // Unnecessary.
       return;
     }
@@ -1919,14 +2020,16 @@ public final class BuildConfiguration {
     return checksum();
   }
 
-  /**
-   * Returns the default shell environment
-   */
-  @SkylarkCallable(name = "default_shell_env", structField = true,
-      doc = "A dictionary representing the default environment. It maps variables "
-      + "to their values (strings).")
-  public ImmutableMap<String, String> getDefaultShellEnvironment() {
-    return defaultShellEnvironment;
+  @SkylarkCallable(
+    name = "default_shell_env",
+    structField = true,
+    doc =
+        "A dictionary representing the local shell environment. It maps variables "
+            + "to their values (strings).  The local shell environment contains settings that are "
+            + "machine specific, therefore its use should be avoided in rules meant to be hermetic."
+  )
+  public ImmutableMap<String, String> getLocalShellEnvironment() {
+    return localShellEnvironment;
   }
 
   /**

@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@ package com.google.devtools.build.workspace;
 import com.google.common.io.Files;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.StoredEventHandler;
-import com.google.devtools.build.lib.packages.ExternalPackage;
+import com.google.devtools.build.lib.packages.Package;
 import com.google.devtools.build.lib.util.OS;
 import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.build.lib.vfs.JavaIoFileSystem;
@@ -95,8 +95,7 @@ public class GenerateWorkspace {
     for (String project : projects) {
       Resolver workspaceResolver = new Resolver(resolver, handler);
       Path projectPath = fileSystem.getPath(getAbsolute(project));
-      ExternalPackage externalPackage =
-          workspaceResolver.parse(projectPath.getRelative("WORKSPACE"));
+      Package externalPackage = workspaceResolver.parse(projectPath.getRelative("WORKSPACE"));
       workspaceResolver.resolveTransitiveDependencies(externalPackage);
     }
   }

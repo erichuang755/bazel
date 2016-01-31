@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,11 +24,11 @@ import com.google.devtools.build.lib.analysis.TargetCompleteEvent;
 import com.google.devtools.build.lib.analysis.TopLevelArtifactContext;
 import com.google.devtools.build.lib.analysis.TopLevelArtifactHelper;
 import com.google.devtools.build.lib.analysis.TopLevelArtifactHelper.ArtifactsToBuild;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.skyframe.AspectValue.AspectKey;
-import com.google.devtools.build.lib.syntax.Label;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyFunctionException;
 import com.google.devtools.build.skyframe.SkyKey;
@@ -148,7 +148,7 @@ public final class CompletionFunction<TValue extends SkyValue, TResult extends S
           String.format(
               "%s, aspect %s: missing input file '%s'",
               value.getLabel(),
-              value.getAspect().getName(),
+              value.getConfiguredAspect().getName(),
               rootCause));
     }
 
@@ -157,7 +157,7 @@ public final class CompletionFunction<TValue extends SkyValue, TResult extends S
       return new MissingInputFileException(
           value.getLabel()
               + ", aspect "
-              + value.getAspect().getName()
+              + value.getConfiguredAspect().getName()
               + missingCount
               + " input file(s) do not exist",
           value.getLocation());

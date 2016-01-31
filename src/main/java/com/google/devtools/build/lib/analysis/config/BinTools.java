@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -128,13 +128,16 @@ public final class BinTools {
   }
 
   public PathFragment getExecPath(String embedPath) {
-    Preconditions.checkState(embeddedTools.contains(embedPath), "%s not in %s", embedPath,
-        embeddedTools);
+    if (!embeddedTools.contains(embedPath)) {
+      return null;
+    }
     return new PathFragment("_bin").getRelative(new PathFragment(embedPath).getBaseName());
   }
 
   public Artifact getEmbeddedArtifact(String embedPath, ArtifactFactory artifactFactory) {
-    return artifactFactory.getDerivedArtifact(getExecPath(embedPath));
+    PathFragment path = getExecPath(embedPath);
+    Preconditions.checkNotNull(path, embedPath + " not found in embedded tools");
+    return artifactFactory.getDerivedArtifact(path);
   }
 
   public ImmutableList<Artifact> getAllEmbeddedArtifacts(ArtifactFactory artifactFactory) {
@@ -168,7 +171,7 @@ public final class BinTools {
   }
 
   private void linkTool(Path sourcePath, Path linkPath) throws ExecException {
-    if (linkPath.getFileSystem().supportsSymbolicLinks()) {
+    if (linkPath.getFileSystem().supportsSymbolicLinksNatively()) {
       try {
         if (!linkPath.isSymbolicLink()) {
           // ensureSymbolicLink() does not handle the case where there is already

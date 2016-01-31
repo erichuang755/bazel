@@ -1,4 +1,4 @@
-# Copyright 2015 Google Inc. All Rights Reserved.
+# Copyright 2015 The Bazel Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -70,7 +70,7 @@ def _impl(ctx):
          (ctx.attr.compilation_level, _COMPILATION_LEVELS.keys()))
 
   ctx.action(
-      inputs=list(srcs),
+      inputs=list(srcs) + list(externs),
       outputs=[ctx.outputs.out],
       arguments=args,
       executable=ctx.executable._closure_compiler)

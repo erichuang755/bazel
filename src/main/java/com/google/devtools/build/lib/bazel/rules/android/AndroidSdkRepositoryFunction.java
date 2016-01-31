@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,18 +14,16 @@
 package com.google.devtools.build.lib.bazel.rules.android;
 
 import com.google.devtools.build.lib.analysis.RuleDefinition;
-import com.google.devtools.build.lib.bazel.repository.RepositoryFunction;
-import com.google.devtools.build.lib.cmdline.PackageIdentifier.RepositoryName;
 import com.google.devtools.build.lib.packages.AttributeMap;
 import com.google.devtools.build.lib.packages.NonconfigurableAttributeMapper;
 import com.google.devtools.build.lib.packages.Rule;
-import com.google.devtools.build.lib.packages.Type;
-import com.google.devtools.build.lib.skyframe.FileValue;
+import com.google.devtools.build.lib.rules.repository.RepositoryFunction;
+import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.util.ResourceFileLoader;
+import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
+import com.google.devtools.build.skyframe.SkyFunction.Environment;
 import com.google.devtools.build.skyframe.SkyFunctionException;
-import com.google.devtools.build.skyframe.SkyFunctionName;
-import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
 
 import java.io.IOException;
@@ -35,24 +33,18 @@ import java.io.IOException;
  */
 public class AndroidSdkRepositoryFunction extends RepositoryFunction {
   @Override
-  public SkyValue compute(SkyKey skyKey, Environment env) throws SkyFunctionException {
-    RepositoryName repositoryName = (RepositoryName) skyKey.argument();
-    Rule rule = getRule(repositoryName, AndroidSdkRepositoryRule.NAME, env);
-    if (rule == null) {
-      return null;
-    }
+  public boolean isLocal() {
+    return true;
+  }
 
-    FileValue directoryValue = prepareLocalRepositorySymlinkTree(rule, env);
-    if (directoryValue == null) {
-      return null;
-    }
-
-    PathFragment pathFragment = getTargetPath(rule);
+  @Override
+  public SkyValue fetch(Rule rule, Path outputDirectory, Environment env)
+      throws SkyFunctionException {
+    prepareLocalRepositorySymlinkTree(rule, outputDirectory);
+    PathFragment pathFragment = getTargetPath(rule, getWorkspace());
 
     if (!symlinkLocalRepositoryContents(
-        directoryValue.realRootedPath().asPath(),
-        getOutputBase().getFileSystem().getPath(pathFragment),
-        env)) {
+        outputDirectory, getOutputBase().getFileSystem().getPath(pathFragment))) {
       return null;
     }
 
@@ -69,18 +61,11 @@ public class AndroidSdkRepositoryFunction extends RepositoryFunction {
     }
 
     String buildFile = template
+        .replaceAll("%repository_name%", rule.getName())
         .replaceAll("%build_tools_version%", buildToolsVersion)
         .replaceAll("%api_level%", apiLevel.toString());
 
-    return writeBuildFile(directoryValue, buildFile);
-  }
-
-  /**
-   * @see RepositoryFunction#getRule(RepositoryName, String, Environment)
-   */
-  @Override
-  public SkyFunctionName getSkyFunctionName() {
-    return SkyFunctionName.create(AndroidSdkRepositoryRule.NAME.toUpperCase());
+    return writeBuildFile(outputDirectory, buildFile);
   }
 
   @Override

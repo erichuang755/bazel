@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,7 +15,6 @@
 package com.google.devtools.build.lib.runtime;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Preconditions;
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -39,6 +38,7 @@ import com.google.devtools.build.lib.concurrent.ThreadSafety;
 import com.google.devtools.build.lib.events.ExceptionListener;
 import com.google.devtools.build.lib.rules.test.TestProvider;
 import com.google.devtools.build.lib.rules.test.TestResult;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.view.test.TestStatus.BlazeTestStatus;
 
 import java.util.Collection;

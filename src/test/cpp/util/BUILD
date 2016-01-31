@@ -1,5 +1,6 @@
 # Description:
 #   C++ utility tests for Bazel
+package(default_visibility = ["//visibility:public"])
 
 cc_test(
     name = "md5_test",
@@ -23,12 +24,11 @@ cc_test(
 cc_test(
     name = "strings_test",
     srcs = ["strings_test.cc"],
+    shard_count = 2,
     deps = [
         "//src/main/cpp/util:strings",
         "//third_party:gtest",
     ],
 )
 
-test_suite(
-    name = "all_tests",
-)
+test_suite(name = "all_tests")

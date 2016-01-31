@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@ package com.google.devtools.build.lib.runtime;
 
 import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterators;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventKind;
@@ -29,6 +30,7 @@ import java.io.IOException;
 import java.util.Calendar;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.logging.Logger;
 import java.util.regex.Matcher;
@@ -94,6 +96,9 @@ public class FancyTerminalEventHandler extends BlazeCommandEventHandler {
           "Searching for cellular signal",
           "Checking for outstanding GCard expenses",
           "Waiting for workstation CPU temperature to decrease");
+
+  private static final Set<Character> PUNCTUATION_CHARACTERS =
+      ImmutableSet.<Character>of(',', '.', ':', '?', '!', ';');
 
   private final Iterator<String> messageIterator = Iterators.cycle(SPECIAL_MESSAGES);
   private volatile boolean trySpecial;
@@ -304,7 +309,7 @@ public class FancyTerminalEventHandler extends BlazeCommandEventHandler {
   /**
    * Send the terminal controls that will put the cursor on the beginning
    * of the same line if cursor control is on, or the next line if not.
-   * @returns True if it did any output; if so, caller is responsible for
+   * @return True if it did any output; if so, caller is responsible for
    *          flushing the terminal if needed.
    */
   private boolean maybeOverwritePreviousMessage() throws IOException {
@@ -331,8 +336,7 @@ public class FancyTerminalEventHandler extends BlazeCommandEventHandler {
       terminal.resetTerminal();
     }
     writeTimestampAndLocation(event);
-    terminal.writeString(event.getMessage());
-    terminal.writeString(".");
+    writeStringWithPotentialPeriod(event.getMessage());
     crlf();
   }
 
@@ -344,8 +348,7 @@ public class FancyTerminalEventHandler extends BlazeCommandEventHandler {
     terminal.writeString("WARNING: ");
     terminal.resetTerminal();
     writeTimestampAndLocation(warning);
-    terminal.writeString(warning.getMessage());
-    terminal.writeString(".");
+    writeStringWithPotentialPeriod(warning.getMessage());
     crlf();
   }
 
@@ -358,8 +361,22 @@ public class FancyTerminalEventHandler extends BlazeCommandEventHandler {
     terminal.resetTerminal();
     writeTimestampAndLocation(event);
     terminal.writeString(event.getMessage());
-    // No period; info messages often end in '...'.
+    // No period; info messages may end with a URL.
     crlf();
+  }
+
+  /**
+   * Writes the given String to the terminal. This method also writes a trailing period if the
+   * message doesn't end with a punctuation character.
+   */
+  private void writeStringWithPotentialPeriod(String message) throws IOException {
+    terminal.writeString(message);
+    if (!message.isEmpty()) {
+      char lastChar = message.charAt(message.length() - 1);
+      if (!PUNCTUATION_CHARACTERS.contains(lastChar)) {
+        terminal.writeString(".");
+      }
+    }
   }
 
   private void subcmd(Event subcmd) throws IOException {

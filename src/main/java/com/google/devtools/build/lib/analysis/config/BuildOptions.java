@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,14 +16,14 @@ package com.google.devtools.build.lib.analysis.config;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Objects;
-import com.google.common.base.Preconditions;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ListMultimap;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.Attribute.SplitTransition;
-import com.google.devtools.build.lib.syntax.Label;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.common.options.Options;
 import com.google.devtools.common.options.OptionsBase;
 import com.google.devtools.common.options.OptionsClassProvider;
@@ -32,6 +32,7 @@ import com.google.devtools.common.options.OptionsParsingException;
 
 import java.io.Serializable;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -140,12 +141,17 @@ public final class BuildOptions implements Cloneable, Serializable {
   /**
    * Returns the actual instance of a FragmentOptions class.
    */
-  @SuppressWarnings("unchecked")
   public <T extends FragmentOptions> T get(Class<T> optionsClass) {
     FragmentOptions options = fragmentOptionsMap.get(optionsClass);
     Preconditions.checkNotNull(options);
-    Preconditions.checkArgument(optionsClass.isAssignableFrom(options.getClass()));
-    return (T) options;
+    return optionsClass.cast(options);
+  }
+
+  /**
+   * Returns true if these options contain the given {@link FragmentOptions}.
+   */
+  public boolean contains(Class<? extends FragmentOptions> optionsClass) {
+    return fragmentOptionsMap.containsKey(optionsClass);
   }
 
   /**
@@ -219,7 +225,7 @@ public final class BuildOptions implements Cloneable, Serializable {
   /**
    * Returns the options contained in this collection.
    */
-  public Iterable<FragmentOptions> getOptions() {
+  public Collection<FragmentOptions> getOptions() {
     return fragmentOptionsMap.values();
   }
 

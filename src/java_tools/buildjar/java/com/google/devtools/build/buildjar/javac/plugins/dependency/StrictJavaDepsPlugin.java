@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,8 +16,6 @@ package com.google.devtools.build.buildjar.javac.plugins.dependency;
 
 import static com.google.devtools.build.buildjar.javac.plugins.dependency.DependencyModule.StrictJavaDeps.ERROR;
 import static com.google.devtools.build.buildjar.javac.plugins.dependency.ImplicitDependencyExtractor.getPlatformJars;
-import static com.google.devtools.build.buildjar.javac.plugins.dependency.ImplicitDependencyExtractor.unwrapFileManager;
-import static com.google.devtools.build.buildjar.javac.plugins.dependency.ImplicitDependencyExtractor.unwrapFileObject;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.devtools.build.buildjar.javac.plugins.BlazeJavaCompilerPlugin;
@@ -109,7 +107,7 @@ public final class StrictJavaDepsPlugin extends BlazeJavaCompilerPlugin {
   public void init(Context context, Log log, JavaCompiler compiler) {
     super.init(context, log, compiler);
     errWriter = log.getWriter(WriterKind.ERROR);
-    this.fileManager = unwrapFileManager(context.get(JavaFileManager.class));
+    this.fileManager = context.get(JavaFileManager.class);
     implicitDependencyExtractor = new ImplicitDependencyExtractor(
         dependencyModule.getUsedClasspath(), dependencyModule.getImplicitDependenciesMap(),
         fileManager);
@@ -212,6 +210,9 @@ public final class StrictJavaDepsPlugin extends BlazeJavaCompilerPlugin {
     /** The set of jars on the compilation bootclasspath. */
     private final Set<String> platformJars;
 
+    /** The set of generators we exempt from this testing. */
+    private final Set<String> exemptGenerators;
+
     public CheckingTreeScanner(DependencyModule dependencyModule, Log log,
         Set<String> missingTargets, Set<String> platformJars, JavaFileManager fileManager) {
       this.indirectJarsToTargets = dependencyModule.getIndirectMapping();
@@ -221,6 +222,7 @@ public final class StrictJavaDepsPlugin extends BlazeJavaCompilerPlugin {
       this.directDependenciesMap = dependencyModule.getExplicitDependenciesMap();
       this.platformJars = platformJars;
       this.fileManager = fileManager;
+      this.exemptGenerators = dependencyModule.getExemptGenerators();
     }
 
     Set<ClassSymbol> getSeenClasses() {
@@ -296,7 +298,7 @@ public final class StrictJavaDepsPlugin extends BlazeJavaCompilerPlugin {
      */
     @Override
     public void visitIdent(JCTree.JCIdent tree) {
-      if (tree.sym != null && tree.sym.kind == Kinds.TYP) {
+      if (tree.sym != null && tree.sym.kind == Kinds.Kind.TYP) {
         checkTypeLiteral(tree);
       }
     }
@@ -309,7 +311,7 @@ public final class StrictJavaDepsPlugin extends BlazeJavaCompilerPlugin {
     @Override
     public void visitSelect(JCTree.JCFieldAccess tree) {
       scan(tree.selected);
-      if (tree.sym != null && tree.sym.kind == Kinds.TYP) {
+      if (tree.sym != null && tree.sym.kind == Kinds.Kind.TYP) {
         checkTypeLiteral(tree);
       }
     }
@@ -330,7 +332,7 @@ public final class StrictJavaDepsPlugin extends BlazeJavaCompilerPlugin {
 
     private static final String DAGGER_PROCESSOR_PREFIX = "dagger.";
 
-    public static boolean generatedByDagger(JCTree.JCClassDecl tree) {
+    public boolean generatedByDagger(JCTree.JCClassDecl tree) {
       if (tree.sym == null) {
         return false;
       }
@@ -345,6 +347,11 @@ public final class StrictJavaDepsPlugin extends BlazeJavaCompilerPlugin {
         // additional exemption for tiktok (b/21307381)
         if (value.equals(TIKTOK_COMPONENT_PROCESSOR_NAME)) {
           return true;
+        }
+        for (String exemptGenerator : exemptGenerators) {
+          if (value.equals(exemptGenerator)) {
+            return true;
+          }
         }
       }
       return false;
@@ -410,7 +417,7 @@ public final class StrictJavaDepsPlugin extends BlazeJavaCompilerPlugin {
       return null;
     }
 
-    JavaFileObject classfile = unwrapFileObject(classSymbol.classfile);
+    JavaFileObject classfile = classSymbol.classfile;
 
     String name = ImplicitDependencyExtractor.getJarName(fileManager, classfile);
     if (name == null) {

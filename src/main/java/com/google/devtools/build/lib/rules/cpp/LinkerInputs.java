@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,11 +15,12 @@
 package com.google.devtools.build.lib.rules.cpp;
 
 import com.google.common.base.Function;
-import com.google.common.base.Preconditions;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.collect.CollectionUtils;
 import com.google.devtools.build.lib.concurrent.ThreadSafety;
+import com.google.devtools.build.lib.util.Preconditions;
 
 /**
  * Factory for creating new {@link LinkerInput} objects.
@@ -113,6 +114,8 @@ public abstract class LinkerInputs {
      * Returns whether the library is a solib symlink.
      */
     boolean isSolibSymlink();
+
+    Iterable<Artifact> getLTOBitcodeFiles();
   }
 
   /**
@@ -143,6 +146,11 @@ public abstract class LinkerInputs {
     @Override
     public boolean containsObjectFiles() {
       return false;
+    }
+
+    @Override
+    public Iterable<Artifact> getLTOBitcodeFiles() {
+      return ImmutableList.of();
     }
 
     @Override
@@ -195,10 +203,18 @@ public abstract class LinkerInputs {
   private static class CompoundLibraryToLink implements LibraryToLink {
     private final Artifact libraryArtifact;
     private final Iterable<Artifact> objectFiles;
+    private final Iterable<Artifact> ltoBitcodeFiles;
 
-    private CompoundLibraryToLink(Artifact libraryArtifact, Iterable<Artifact> objectFiles) {
+    private CompoundLibraryToLink(
+        Artifact libraryArtifact,
+        Iterable<Artifact> objectFiles,
+        Iterable<Artifact> ltoBitcodeFiles) {
       this.libraryArtifact = Preconditions.checkNotNull(libraryArtifact);
       this.objectFiles = objectFiles == null ? null : CollectionUtils.makeImmutable(objectFiles);
+      this.ltoBitcodeFiles =
+          (ltoBitcodeFiles == null)
+              ? ImmutableList.<Artifact>of()
+              : CollectionUtils.makeImmutable(ltoBitcodeFiles);
     }
 
     @Override
@@ -230,6 +246,11 @@ public abstract class LinkerInputs {
     public Iterable<Artifact> getObjectFiles() {
       Preconditions.checkNotNull(objectFiles);
       return objectFiles;
+    }
+
+    @Override
+    public Iterable<Artifact> getLTOBitcodeFiles() {
+      return ltoBitcodeFiles;
     }
 
     @Override
@@ -318,14 +339,15 @@ public abstract class LinkerInputs {
     // Preconditions.checkArgument(
     //     !(artifact.getGeneratingAction() instanceof CppLinkAction) ||
     //     !Link.ARCHIVE_LIBRARY_FILETYPES.contains(artifact.getFileType()));
-    return new CompoundLibraryToLink(artifact, null);
+    return new CompoundLibraryToLink(artifact, null, null);
   }
 
   /**
    * Creates a library to link with the specified object files.
    */
-  public static LibraryToLink newInputLibrary(Artifact library, Iterable<Artifact> objectFiles) {
-    return new CompoundLibraryToLink(library, objectFiles);
+  public static LibraryToLink newInputLibrary(
+      Artifact library, Iterable<Artifact> objectFiles, Iterable<Artifact> ltoBitcodeFiles) {
+    return new CompoundLibraryToLink(library, objectFiles, ltoBitcodeFiles);
   }
 
   private static final Function<LibraryToLink, Artifact> LIBRARY_TO_NON_SOLIB =

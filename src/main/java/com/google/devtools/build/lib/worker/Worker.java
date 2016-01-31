@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,9 +13,10 @@
 // limitations under the License.
 package com.google.devtools.build.lib.worker;
 
-import com.google.common.base.Preconditions;
+import com.google.common.hash.HashCode;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.Reporter;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.Path;
 
 import java.io.IOException;
@@ -40,11 +41,13 @@ final class Worker {
   private final int workerId;
   private final Process process;
   private final Thread shutdownHook;
+  private final HashCode workerFilesHash;
 
-  private Worker(Process process, Thread shutdownHook, int pid) {
+  private Worker(Process process, Thread shutdownHook, int pid, HashCode workerFilesHash) {
     this.process = process;
     this.shutdownHook = shutdownHook;
     this.workerId = pid;
+    this.workerFilesHash = workerFilesHash;
   }
 
   static Worker create(WorkerKey key, Path logDir, Reporter reporter, boolean verbose)
@@ -63,12 +66,13 @@ final class Worker {
 
     final Process process = processBuilder.start();
 
-    Thread shutdownHook = new Thread() {
-      @Override
-      public void run() {
-        process.destroy();
-      }
-    };
+    Thread shutdownHook =
+        new Thread() {
+          @Override
+          public void run() {
+            destroyProcess(process);
+          }
+        };
     Runtime.getRuntime().addShutdownHook(shutdownHook);
 
     if (verbose) {
@@ -82,12 +86,38 @@ final class Worker {
                   + logFile));
     }
 
-    return new Worker(process, shutdownHook, workerId);
+    return new Worker(process, shutdownHook, workerId, key.getWorkerFilesHash());
   }
 
   void destroy() {
     Runtime.getRuntime().removeShutdownHook(shutdownHook);
-    process.destroy();
+    destroyProcess(process);
+  }
+
+  /**
+   * Destroys a process and waits for it to exit. This is necessary for the child to not become a
+   * zombie.
+   *
+   * @param process the process to destroy.
+   */
+  private static void destroyProcess(Process process) {
+    boolean wasInterrupted = false;
+    try {
+      process.destroy();
+      while (true) {
+        try {
+          process.waitFor();
+          return;
+        } catch (InterruptedException ie) {
+          wasInterrupted = true;
+        }
+      }
+    } finally {
+      // Read this for detailed explanation: http://www.ibm.com/developerworks/library/j-jtp05236/
+      if (wasInterrupted) {
+        Thread.currentThread().interrupt(); // preserve interrupted status
+      }
+    }
   }
 
   /**
@@ -96,6 +126,10 @@ final class Worker {
    */
   int getWorkerId() {
     return this.workerId;
+  }
+
+  HashCode getWorkerFilesHash() {
+    return workerFilesHash;
   }
 
   boolean isAlive() {

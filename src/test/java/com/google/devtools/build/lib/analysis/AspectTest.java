@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,15 +13,34 @@
 // limitations under the License.
 package com.google.devtools.build.lib.analysis;
 
+import static com.google.common.collect.Iterables.getOnlyElement;
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.devtools.build.lib.analysis.BaseRuleClasses.ACTION_LISTENER;
+import static com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode.TARGET;
+import static com.google.devtools.build.lib.analysis.util.TestAspects.EMPTY_LATE_BOUND_LABEL;
+import static com.google.devtools.build.lib.packages.Attribute.ConfigurationTransition.HOST;
+import static com.google.devtools.build.lib.packages.Attribute.attr;
+import static com.google.devtools.build.lib.packages.BuildType.LABEL;
+import static com.google.devtools.build.lib.packages.BuildType.LABEL_LIST;
+import static org.junit.Assert.fail;
 
+import com.google.devtools.build.lib.actions.util.ActionsTestUtil.NullAction;
 import com.google.devtools.build.lib.analysis.util.AnalysisTestCase;
 import com.google.devtools.build.lib.analysis.util.TestAspects;
+import com.google.devtools.build.lib.analysis.util.TestAspects.AspectInfo;
 import com.google.devtools.build.lib.analysis.util.TestAspects.AspectRequiringRule;
+import com.google.devtools.build.lib.analysis.util.TestAspects.BaseRule;
+import com.google.devtools.build.lib.analysis.util.TestAspects.DummyRuleFactory;
+import com.google.devtools.build.lib.analysis.util.TestAspects.RuleInfo;
+import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.collect.nestedset.NestedSet;
+import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
+import com.google.devtools.build.lib.collect.nestedset.Order;
+import com.google.devtools.build.lib.packages.AspectDefinition;
+import com.google.devtools.build.lib.packages.AspectParameters;
+import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.testutil.TestRuleClassProvider;
 
-import org.junit.After;
-import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -34,19 +53,7 @@ import org.junit.runners.JUnit4;
  */
 @RunWith(JUnit4.class)
 public class AspectTest extends AnalysisTestCase {
-  @Override
-  @Before
-  public void setUp() throws Exception {
-    super.setUp();
-  }
 
-  @Override
-  @After
-  public void tearDown() throws Exception {
-    super.tearDown();
-  }
-
-  @SafeVarargs
   private final void setRules(RuleDefinition... rules) throws Exception {
     ConfiguredRuleClassProvider.Builder builder =
         new ConfiguredRuleClassProvider.Builder();
@@ -71,7 +78,7 @@ public class AspectTest extends AnalysisTestCase {
         "aspect(name='b', foo=[])");
 
     ConfiguredTarget a = getConfiguredTarget("//a:a");
-    assertThat(a.getProvider(TestAspects.RuleInfo.class).getData())
+    assertThat(a.getProvider(RuleInfo.class).getData())
         .containsExactly("aspect //a:b", "rule //a:a");
   }
 
@@ -85,8 +92,7 @@ public class AspectTest extends AnalysisTestCase {
         "liar(name='b', foo=[])");
 
     ConfiguredTarget a = getConfiguredTarget("//a:a");
-    assertThat(a.getProvider(TestAspects.RuleInfo.class).getData())
-        .containsExactly("rule //a:a");
+    assertThat(a.getProvider(RuleInfo.class).getData()).containsExactly("rule //a:a");
   }
 
   @Test
@@ -99,8 +105,30 @@ public class AspectTest extends AnalysisTestCase {
         "honest(name='b', foo=[])");
 
     ConfiguredTarget a = getConfiguredTarget("//a:a");
-    assertThat(a.getProvider(TestAspects.RuleInfo.class).getData())
+    assertThat(a.getProvider(RuleInfo.class).getData())
         .containsExactly("rule //a:a", "aspect //a:b");
+  }
+
+  @Test
+  public void aspectWithParametrizedDefinition() throws Exception {
+    setRules(
+        new TestAspects.BaseRule(),
+        new TestAspects.HonestRule(),
+        new TestAspects.ParametrizedDefinitionAspectRule());
+
+    pkg(
+        "a",
+        "honest(name='q', foo=[])",
+        "parametrized_definition_aspect(name='a', foo=[':b'], baz='//a:q')",
+        "honest(name='c', foo=[])",
+        "honest(name='b', foo=[':c'])");
+
+    ConfiguredTarget a = getConfiguredTarget("//a:a");
+    assertThat(a.getProvider(TestAspects.RuleInfo.class).getData())
+        .containsExactly(
+            "rule //a:a",
+            "aspect //a:b data //a:q $dep:[ //a:q]",
+            "aspect //a:c data //a:q $dep:[ //a:q]");
   }
 
   @Test
@@ -157,7 +185,7 @@ public class AspectTest extends AnalysisTestCase {
         "aspect(name='b', foo=[])");
 
     ConfiguredTarget a = getConfiguredTarget("//a:a");
-    assertThat(a.getProvider(TestAspects.RuleInfo.class).getData())
+    assertThat(a.getProvider(RuleInfo.class).getData())
         .containsExactly("aspect //a:b", "rule //a:a");
   }
 
@@ -171,7 +199,143 @@ public class AspectTest extends AnalysisTestCase {
         "honest(name='b', foo=[])");
 
     ConfiguredTarget a = getConfiguredTarget("//a:a");
-    assertThat(a.getProvider(TestAspects.RuleInfo.class).getData())
+    assertThat(a.getProvider(RuleInfo.class).getData())
         .containsExactly("rule //a:a", "aspect //a:b data hello");
+  }
+
+  /**
+   * Rule definitions to be used in emptyAspectAttributesAreAvailableInRuleContext().
+   */
+  public static class EmptyAspectAttributesAreAvailableInRuleContext {
+    public static class TestRule implements RuleDefinition {
+      @Override
+      public RuleClass build(RuleClass.Builder builder, RuleDefinitionEnvironment environment) {
+        return builder
+            .add(attr("foo", LABEL_LIST).legacyAllowAnyFileType()
+                .aspect(AspectWithEmptyLateBoundAttribute.class))
+            .build();
+      }
+
+      @Override
+      public Metadata getMetadata() {
+        return RuleDefinition.Metadata.builder().name("testrule")
+            .factoryClass(DummyRuleFactory.class).ancestors(BaseRule.class).build();
+      }
+    }
+
+    public static class AspectWithEmptyLateBoundAttribute implements ConfiguredNativeAspectFactory {
+      @Override
+      public AspectDefinition getDefinition(AspectParameters params) {
+        return new AspectDefinition.Builder("testaspect")
+            .add(attr(":late", LABEL).value(EMPTY_LATE_BOUND_LABEL)).build();
+      }
+
+      @Override
+      public ConfiguredAspect create(
+          ConfiguredTarget base, RuleContext ruleContext, AspectParameters parameters)
+          throws InterruptedException {
+        Object lateBoundPrereq = ruleContext.getPrerequisite(":late", TARGET);
+        return new ConfiguredAspect.Builder("testaspect", ruleContext)
+            .addProvider(
+                AspectInfo.class,
+                new AspectInfo(
+                    NestedSetBuilder.create(
+                        Order.STABLE_ORDER, lateBoundPrereq != null ? "non-empty" : "empty")))
+            .build();
+      }
+    }
+  }
+
+  /**
+   * An Aspect has a late-bound attribute with no value (that is, a LateBoundLabel whose
+   * getDefault() returns `null`).
+   * Test that this attribute is available in the RuleContext which is provided to the Aspect's
+   * `create()` method.
+   */
+  @Test
+  public void emptyAspectAttributesAreAvailableInRuleContext() throws Exception {
+    setRules(new TestAspects.BaseRule(),
+        new EmptyAspectAttributesAreAvailableInRuleContext.TestRule());
+    pkg("a",
+        "testrule(name='a', foo=[':b'])",
+        "testrule(name='b')");
+    ConfiguredTarget a = getConfiguredTarget("//a:a");
+    assertThat(a.getProvider(RuleInfo.class).getData()).contains("empty");
+  }
+
+  /**
+   * Rule definitions to be used in extraActionsAreEmitted().
+   */
+  public static class ExtraActionsAreEmitted {
+    public static class TestRule implements RuleDefinition {
+      @Override
+      public RuleClass build(RuleClass.Builder builder, RuleDefinitionEnvironment environment) {
+        return builder
+            .add(attr("foo", LABEL_LIST).legacyAllowAnyFileType().aspect(
+                AspectThatRegistersAction.class))
+            .add(attr(":action_listener", LABEL_LIST).cfg(HOST).value(ACTION_LISTENER))
+            .build();
+      }
+
+      @Override
+      public Metadata getMetadata() {
+        return RuleDefinition.Metadata.builder().name("testrule")
+            .factoryClass(DummyRuleFactory.class).ancestors(BaseRule.class).build();
+      }
+    }
+
+    public static class AspectThatRegistersAction implements ConfiguredNativeAspectFactory {
+      @Override
+      public AspectDefinition getDefinition(AspectParameters params) {
+        return new AspectDefinition.Builder("testaspect").build();
+      }
+
+      @Override
+      public ConfiguredAspect create(
+          ConfiguredTarget base, RuleContext ruleContext, AspectParameters parameters)
+              throws InterruptedException {
+        ruleContext.registerAction(new NullAction(ruleContext.createOutputArtifact()));
+        return new ConfiguredAspect.Builder("testaspect", ruleContext).build();
+      }
+    }
+  }
+
+  /**
+   * Test that actions registered in an Aspect are reported as extra-actions on the attached rule.
+   * AspectThatRegistersAction registers a NullAction, whose mnemonic is "Null". We have an
+   * action_listener that targets that mnemonic, which makes sure the Aspect machinery will expose
+   * an ExtraActionArtifactsProvider.
+   * The rule //a:a doesn't have an aspect, so the only action we get is the one on //a:b
+   * (which does have an aspect).
+   */
+  @Test
+  public void extraActionsAreEmitted() throws Exception {
+    setRules(new TestAspects.BaseRule(),
+        new ExtraActionsAreEmitted.TestRule());
+    useConfiguration("--experimental_action_listener=//extra_actions:listener");
+    scratch.file(
+        "extra_actions/BUILD",
+        "extra_action(name='xa', cmd='echo dont-care')",
+        "action_listener(name='listener', mnemonics=['Null'], extra_actions=[':xa'])");
+    pkg("a",
+        "testrule(name='a', foo=[':b'])",
+        "testrule(name='b')");
+    update();
+
+    ConfiguredTarget a = getConfiguredTarget("//a:a");
+    NestedSet<ExtraActionArtifactsProvider.ExtraArtifactSet> extraActionArtifacts =
+        a.getProvider(ExtraActionArtifactsProvider.class)
+            .getTransitiveExtraActionArtifacts();
+    assertThat(getOnlyElement(extraActionArtifacts).getLabel()).isEqualTo(Label.create("a", "b"));
+
+  }
+
+  @RunWith(JUnit4.class)
+  public static class AspectTestWithoutLoading extends AspectTest {
+
+    @Override
+    protected boolean isLoadingEnabled() {
+      return false;
+    }
   }
 }

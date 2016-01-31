@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,6 @@
 
 package com.google.devtools.build.lib.rules.cpp;
 
-import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
@@ -24,15 +23,16 @@ import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
-import com.google.devtools.build.lib.packages.Type;
+import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.rules.cpp.CcCompilationOutputs.Builder;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainFeatures.FeatureConfiguration;
 import com.google.devtools.build.lib.rules.cpp.Link.LinkStaticness;
 import com.google.devtools.build.lib.rules.cpp.Link.LinkTargetType;
 import com.google.devtools.build.lib.rules.cpp.LinkerInputs.LibraryToLink;
-import com.google.devtools.build.lib.syntax.Label;
 import com.google.devtools.build.lib.util.Pair;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.util.RegexFilter;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -124,9 +124,9 @@ public final class CppModel {
 
   /**
    * Adds a single source file to be compiled. Note that this should only be called for primary
-   * compilation units, not for header files or files that are otherwise included.
+   * compilation units, including module files or headers to be parsed or preprocessed.
    */
-  public CppModel addSources(Iterable<Artifact> sourceFiles, Label sourceLabel) {
+  public CppModel addCompilationUnitSources(Iterable<Artifact> sourceFiles, Label sourceLabel) {
     for (Artifact sourceFile : sourceFiles) {
       this.sourceFiles.add(Pair.of(sourceFile, sourceLabel));
     }
@@ -134,10 +134,10 @@ public final class CppModel {
   }
 
   /**
-   * Adds all the source files. Note that this should only be called for primary compilation units,
-   * not for header files or files that are otherwise included.
+   * Adds all the source files. Note that this should only be called for primary
+   * compilation units, including module files or headers to be parsed or preprocessed.
    */
-  public CppModel addSources(Iterable<Pair<Artifact, Label>> sources) {
+  public CppModel addCompilationUnitSources(Iterable<Pair<Artifact, Label>> sources) {
     Iterables.addAll(this.sourceFiles, sources);
     return this;
   }
@@ -346,6 +346,12 @@ public final class CppModel {
       buildVariables.addVariable("module_name", cppModuleMap.getName());
       buildVariables.addVariable("module_map_file",
           cppModuleMap.getArtifact().getExecPathString());
+      CcToolchainFeatures.Variables.NestedSequence.Builder sequence =
+          new CcToolchainFeatures.Variables.NestedSequence.Builder();
+      for (Artifact artifact : context.getDirectModuleMaps()) {
+        sequence.addValue(artifact.getExecPathString());
+      }
+      buildVariables.addSequence("dependent_module_map_files", sequence.build());
     }
     if (featureConfiguration.isEnabled(CppRuleClasses.USE_HEADER_MODULES)) {
       buildVariables.addSequenceVariable("module_files", getHeaderModulePaths(builder, usePic));
@@ -478,7 +484,12 @@ public final class CppModel {
         CppCompileAction picAction = picBuilder.build();
         env.registerAction(picAction);
         if (addObject) {
-          result.addPicObjectFile(picAction.getOutputFile());          
+          result.addPicObjectFile(picAction.getOutputFile());
+
+          if (featureConfiguration.isEnabled(CppRuleClasses.THIN_LTO)
+              && CppFileTypes.LTO_SOURCE.matches(sourceArtifact.getFilename())) {
+            result.addLTOBitcodeFile(picAction.getOutputFile());
+          }
         }
         if (picAction.getDwoFile() != null) {
           // Host targets don't produce .dwo files.
@@ -505,8 +516,12 @@ public final class CppModel {
 
         if (maySaveTemps) {
           result.addTemps(
-              createTempsActions(sourceArtifact, outputName, builder, /*usePic=*/false,
-                ccRelativeName));
+              createTempsActions(
+                  sourceArtifact,
+                  outputName,
+                  builder,
+                  /*usePic=*/ false,
+                  ccRelativeName));
         }
 
         semantics.finalizeCompileActionBuilder(ruleContext, builder);
@@ -515,6 +530,10 @@ public final class CppModel {
         Artifact objectFile = compileAction.getOutputFile();
         if (addObject) {
           result.addObjectFile(objectFile);
+          if (featureConfiguration.isEnabled(CppRuleClasses.THIN_LTO)
+              && CppFileTypes.LTO_SOURCE.matches(sourceArtifact.getFilename())) {
+            result.addLTOBitcodeFile(objectFile);
+          }
         }
         if (compileAction.getDwoFile() != null) {
           // Host targets don't produce .dwo files.
@@ -597,12 +616,14 @@ public final class CppModel {
     // Presumably, it is done this way because the .a file is an implicit output of every cc_library
     // rule, so we can't use ".pic.a" that in the always-PIC case.
     Artifact linkedArtifact = CppHelper.getLinkedArtifact(ruleContext, linkType);
-    CppLinkAction maybePicAction = newLinkActionBuilder(linkedArtifact)
-        .addNonLibraryInputs(ccOutputs.getObjectFiles(usePicForBinaries))
-        .addNonLibraryInputs(ccOutputs.getHeaderTokenFiles())
-        .setLinkType(linkType)
-        .setLinkStaticness(LinkStaticness.FULLY_STATIC)
-        .build();
+    CppLinkAction maybePicAction =
+        newLinkActionBuilder(linkedArtifact)
+            .addNonLibraryInputs(ccOutputs.getObjectFiles(usePicForBinaries))
+            .addNonLibraryInputs(ccOutputs.getHeaderTokenFiles())
+            .addLTOBitcodeFiles(ccOutputs.getLtoBitcodeFiles())
+            .setLinkType(linkType)
+            .setLinkStaticness(LinkStaticness.FULLY_STATIC)
+            .build();
     env.registerAction(maybePicAction);
     result.addStaticLibrary(maybePicAction.getOutputLibrary());
 
@@ -615,12 +636,14 @@ public final class CppModel {
           : LinkTargetType.PIC_STATIC_LIBRARY;
 
       Artifact picArtifact = CppHelper.getLinkedArtifact(ruleContext, picLinkType);
-      CppLinkAction picAction = newLinkActionBuilder(picArtifact)
-          .addNonLibraryInputs(ccOutputs.getObjectFiles(true))
-          .addNonLibraryInputs(ccOutputs.getHeaderTokenFiles())
-          .setLinkType(picLinkType)
-          .setLinkStaticness(LinkStaticness.FULLY_STATIC)
-          .build();
+      CppLinkAction picAction =
+          newLinkActionBuilder(picArtifact)
+              .addNonLibraryInputs(ccOutputs.getObjectFiles(true))
+              .addNonLibraryInputs(ccOutputs.getHeaderTokenFiles())
+              .addLTOBitcodeFiles(ccOutputs.getLtoBitcodeFiles())
+              .setLinkType(picLinkType)
+              .setLinkStaticness(LinkStaticness.FULLY_STATIC)
+              .build();
       env.registerAction(picAction);
       result.addPicStaticLibrary(picAction.getOutputLibrary());
     }
@@ -794,7 +817,7 @@ public final class CppModel {
       //    readable and can lead to unexpected breakage.
       // b) Traversing the transitive closure for each C++ compile action would require more complex
       //    implementation (with caching results of this method) to avoid O(N^2) slowdown.
-      if (ruleContext.getRule().isAttrDefined("deps", Type.LABEL_LIST)) {
+      if (ruleContext.getRule().isAttrDefined("deps", BuildType.LABEL_LIST)) {
         for (TransitiveInfoCollection dep : ruleContext.getPrerequisites("deps", Mode.TARGET)) {
           if (dep.getProvider(CppCompilationContext.class) != null
               && filter.isIncluded(dep.getLabel().toString())) {

@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,11 +15,13 @@
 package com.google.devtools.build.lib.rules.objc;
 
 import com.google.common.base.Optional;
-import com.google.common.base.Preconditions;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.Root;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.RuleContext;
-import com.google.devtools.build.lib.syntax.Label;
+import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.rules.cpp.CppModuleMap;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
 
@@ -28,7 +30,7 @@ import com.google.devtools.build.lib.vfs.PathFragment;
  */
 // TODO(bazel-team): This should really be named DerivedArtifacts as it contains methods for
 // final as well as intermediate artifacts.
-final class IntermediateArtifacts {
+public final class IntermediateArtifacts {
 
   /**
    * Extension used on the temporary zipped dsym bundle location. Must contain {@code .dSYM} for
@@ -72,7 +74,7 @@ final class IntermediateArtifacts {
             ruleContext.getConfiguration().getBinDirectory());
     return artifact;
   }
-  
+
   /**
    * Returns a derived artifact in the bin directory obtained by appending some extension to the end
    * of the given {@link PathFragment}.
@@ -97,6 +99,16 @@ final class IntermediateArtifacts {
   public Artifact dummySource() {
     return scopedArtifact(
         ruleContext.getPrerequisiteArtifact("$dummy_source", Mode.TARGET).getRootRelativePath());
+  }
+
+  /**
+   * Returns a derived artifact in the genfiles directory obtained by appending some extension to
+   * the end of the {@link PathFragment} corresponding to the owner {@link Label}.
+   */
+  private Artifact appendExtensionInGenfiles(String extension) {
+    PathFragment name = new PathFragment(ruleContext.getLabel().getName());
+    return scopedArtifact(
+        name.replaceName(name.getBaseName() + extension), /* inGenfiles = */ true);
   }
 
   /**
@@ -161,21 +173,32 @@ final class IntermediateArtifacts {
     return appendExtension("_lipobin");
   }
 
-  private Artifact scopedArtifact(PathFragment scopeRelative) {
+  private Artifact scopedArtifact(PathFragment scopeRelative, boolean inGenfiles) {
+    Root root =
+        inGenfiles
+            ? ruleContext.getConfiguration().getGenfilesDirectory()
+            : ruleContext.getConfiguration().getBinDirectory();
     if (scopingLabel.isPresent()) {
       // The path of this artifact will be
       // RULE_PACKAGE/_intermediate_scoped/RULE_LABEL/SCOPING_PACKAGE/SCOPING_LABEL/SCOPERELATIVE
-      return ruleContext.getUniqueDirectoryArtifact("_intermediate_scoped",
-          scopingLabel.get().getPackageIdentifier().getPathFragment()
+      return ruleContext.getUniqueDirectoryArtifact(
+          "_intermediate_scoped",
+          scopingLabel
+              .get()
+              .getPackageIdentifier()
+              .getPathFragment()
               .getRelative(scopingLabel.get().getName())
               .getRelative(scopeRelative),
-          ruleContext.getConfiguration().getBinDirectory());
+          root);
     } else {
       // The path of this artifact will be
       // RULE_PACKAGE/SCOPERELATIVE
-      return ruleContext.getPackageRelativeArtifact(scopeRelative,
-          ruleContext.getConfiguration().getBinDirectory());
+      return ruleContext.getPackageRelativeArtifact(scopeRelative, root);
     }
+  }
+
+  private Artifact scopedArtifact(PathFragment scopeRelative) {
+    return scopedArtifact(scopeRelative, /* inGenfiles = */ false);
   }
 
   /**
@@ -331,5 +354,31 @@ final class IntermediateArtifacts {
    */
   public Artifact runnerScript() {
     return appendExtension("_runner.sh");
+  }
+
+  /**
+   * Dependency file that is generated when compiling the {@code source} artifact.
+   */
+  public Artifact dotdFile(Artifact source) {
+     return inUniqueObjsDir(source, ".d");
+  }
+
+  /**
+   * {@link CppModuleMap} that provides the clang module map for this target.
+   */
+  public CppModuleMap moduleMap() {
+    if (!ObjcRuleClasses.objcConfiguration(ruleContext).moduleMapsEnabled()) {
+      throw new IllegalStateException();
+    }
+    String moduleName =
+        ruleContext
+            .getLabel()
+            .toString()
+            .replace("//", "")
+            .replace("/", "_")
+            .replace(":", "_");
+    // To get Swift to pick up module maps, we need to name them "module.modulemap" and have their
+    // parent directory in the module map search paths.
+    return new CppModuleMap(appendExtensionInGenfiles(".modulemaps/module.modulemap"), moduleName);
   }
 }

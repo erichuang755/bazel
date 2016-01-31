@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,14 +14,18 @@
 
 package com.google.devtools.build.lib.bazel.rules.java;
 
-import com.google.common.base.Preconditions;
+import static com.google.common.base.Strings.isNullOrEmpty;
+
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetBuilder;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.Runfiles;
+import com.google.devtools.build.lib.analysis.RunfilesProvider;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.actions.CustomCommandLine;
 import com.google.devtools.build.lib.analysis.actions.TemplateExpansionAction;
@@ -29,23 +33,23 @@ import com.google.devtools.build.lib.analysis.actions.TemplateExpansionAction.Co
 import com.google.devtools.build.lib.analysis.actions.TemplateExpansionAction.Substitution;
 import com.google.devtools.build.lib.analysis.actions.TemplateExpansionAction.Template;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
-import com.google.devtools.build.lib.analysis.config.BuildConfiguration.StrictDepsMode;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
-import com.google.devtools.build.lib.packages.Type;
+import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.rules.java.DeployArchiveBuilder;
 import com.google.devtools.build.lib.rules.java.DeployArchiveBuilder.Compression;
-import com.google.devtools.build.lib.rules.java.DirectDependencyProvider;
-import com.google.devtools.build.lib.rules.java.DirectDependencyProvider.Dependency;
 import com.google.devtools.build.lib.rules.java.JavaCommon;
 import com.google.devtools.build.lib.rules.java.JavaCompilationArtifacts;
 import com.google.devtools.build.lib.rules.java.JavaCompilationHelper;
 import com.google.devtools.build.lib.rules.java.JavaConfiguration;
 import com.google.devtools.build.lib.rules.java.JavaHelper;
 import com.google.devtools.build.lib.rules.java.JavaPrimaryClassProvider;
+import com.google.devtools.build.lib.rules.java.JavaRunfilesProvider;
 import com.google.devtools.build.lib.rules.java.JavaSemantics;
 import com.google.devtools.build.lib.rules.java.JavaTargetAttributes;
 import com.google.devtools.build.lib.rules.java.JavaUtil;
 import com.google.devtools.build.lib.rules.java.Jvm;
+import com.google.devtools.build.lib.syntax.Type;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.util.ShellEscaper;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -53,6 +57,7 @@ import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Semantics for Bazel Java rules
@@ -82,23 +87,37 @@ public class BazelJavaSemantics implements JavaSemantics {
     }
   }
   
-  private String getMainClassInternal(RuleContext ruleContext) {
-    return ruleContext.getRule().isAttrDefined("main_class", Type.STRING)
+  private String getMainClassInternal(RuleContext ruleContext, JavaCommon javaCommon) {
+    String mainClass = ruleContext.getRule().isAttrDefined("main_class", Type.STRING)
         ? ruleContext.attributes().get("main_class", Type.STRING) : "";
+    boolean createExecutable = ruleContext.attributes().get("create_executable", Type.BOOLEAN);
+    boolean useTestrunner = ruleContext.attributes().get("use_testrunner", Type.BOOLEAN)
+        && !useLegacyJavaTest(ruleContext);
+
+    if (createExecutable) {
+      if (useTestrunner) {
+        mainClass = "com.google.testing.junit.runner.BazelTestRunner";
+      } else { /* java_binary or non-Junit java_test */
+        if (mainClass.isEmpty()) {
+          mainClass = javaCommon.determinePrimaryClass(javaCommon.getSrcsArtifacts());
+        }
+      }
+    }
+
+    return mainClass;
   }
 
   private void checkMainClass(RuleContext ruleContext, JavaCommon javaCommon) {
     boolean createExecutable = ruleContext.attributes().get("create_executable", Type.BOOLEAN);
-    String mainClass = getMainClassInternal(ruleContext);
+    String mainClass = getMainClassInternal(ruleContext, javaCommon);
 
-    if (!createExecutable && !mainClass.isEmpty()) {
+    if (!createExecutable && !isNullOrEmpty(mainClass)) {
       ruleContext.ruleError("main class must not be specified when executable is not created");
     }
 
-    if (createExecutable && mainClass.isEmpty()) {
+    if (createExecutable && isNullOrEmpty(mainClass)) {
       if (javaCommon.getSrcsArtifacts().isEmpty()) {
-        ruleContext.ruleError(
-            "need at least one of 'main_class', 'use_testrunner' or Java source files");
+        ruleContext.ruleError("need at least one of 'main_class' or Java source files");
       }
       mainClass = javaCommon.determinePrimaryClass(javaCommon.getSrcsArtifacts());
       if (mainClass == null) {
@@ -113,12 +132,12 @@ public class BazelJavaSemantics implements JavaSemantics {
   @Override
   public String getMainClass(RuleContext ruleContext, JavaCommon javaCommon) {
     checkMainClass(ruleContext, javaCommon);
-    return getMainClassInternal(ruleContext);
+    return getMainClassInternal(ruleContext, javaCommon);
   }
 
   @Override
   public ImmutableList<Artifact> collectResources(RuleContext ruleContext) {
-    if (!ruleContext.getRule().isAttrDefined("resources", Type.LABEL_LIST)) {
+    if (!ruleContext.getRule().isAttrDefined("resources", BuildType.LABEL_LIST)) {
       return ImmutableList.of();
     }
 
@@ -200,9 +219,30 @@ public class BazelJavaSemantics implements JavaSemantics {
     }
   }
 
+  private TransitiveInfoCollection getTestSupport(RuleContext ruleContext) {
+    if (!isJavaBinaryOrJavaTest(ruleContext)) {
+      return null;
+    }
+    if (useLegacyJavaTest(ruleContext)) {
+      return null;
+    }
+
+    boolean createExecutable = ruleContext.attributes().get("create_executable", Type.BOOLEAN);
+    if (createExecutable && ruleContext.attributes().get("use_testrunner", Type.BOOLEAN)) {
+      return Iterables.getOnlyElement(ruleContext.getPrerequisites("$testsupport", Mode.TARGET));
+    } else {
+      return null;
+    }
+  }
+
   @Override
   public void addRunfilesForBinary(RuleContext ruleContext, Artifact launcher,
       Runfiles.Builder runfilesBuilder) {
+    TransitiveInfoCollection testSupport = getTestSupport(ruleContext);
+    if (testSupport != null) {
+      runfilesBuilder.addTarget(testSupport, JavaRunfilesProvider.TO_RUNFILES);
+      runfilesBuilder.addTarget(testSupport, RunfilesProvider.DEFAULT_RUNFILES);
+    }
   }
 
   @Override
@@ -212,6 +252,13 @@ public class BazelJavaSemantics implements JavaSemantics {
   @Override
   public void collectTargetsTreatedAsDeps(
       RuleContext ruleContext, ImmutableList.Builder<TransitiveInfoCollection> builder) {
+    TransitiveInfoCollection testSupport = getTestSupport(ruleContext);
+    if (testSupport != null) {
+      // TODO(bazel-team): The testsupport is used as the test framework
+      // and really only needs to be on the runtime, not compile-time
+      // classpath.
+      builder.add(testSupport);
+    }
   }
 
   @Override
@@ -231,26 +278,88 @@ public class BazelJavaSemantics implements JavaSemantics {
       JavaCompilationHelper helper,
       NestedSetBuilder<Artifact> filesBuilder,
       RuleConfiguredTargetBuilder ruleBuilder) {
-    if (!isJavaBinaryOrJavaTest(ruleContext)) {
-      Artifact outputDepsProto = helper.getOutputDepsProtoArtifact();
-      if (outputDepsProto != null && helper.getStrictJavaDeps() != StrictDepsMode.OFF) {
-        ImmutableList<Dependency> strictDependencies =
-            javaCommon.computeStrictDepsFromJavaAttributes(helper.getAttributes());
-        ruleBuilder.add(DirectDependencyProvider.class,
-            new DirectDependencyProvider(strictDependencies));
-      }
-    } else {
-      boolean createExec = ruleContext.attributes().get("create_executable", Type.BOOLEAN);
-      ruleBuilder.add(JavaPrimaryClassProvider.class, 
-          new JavaPrimaryClassProvider(createExec ? getMainClassInternal(ruleContext) : null));
+    if (isJavaBinaryOrJavaTest(ruleContext)) {
+      ruleBuilder.add(
+          JavaPrimaryClassProvider.class,
+          new JavaPrimaryClassProvider(getPrimaryClass(ruleContext, javaCommon)));
     }
   }
 
+  // TODO(dmarting): simplify that logic when we remove the legacy Bazel java_test behavior.
+  private String getPrimaryClassLegacy(RuleContext ruleContext, JavaCommon javaCommon) {
+    boolean createExecutable = ruleContext.attributes().get("create_executable", Type.BOOLEAN);
+    if (!createExecutable) {
+      return null;
+    }
+    return getMainClassInternal(ruleContext, javaCommon);
+  }
+
+  private String getPrimaryClassNew(RuleContext ruleContext, JavaCommon javaCommon) {
+    boolean createExecutable = ruleContext.attributes().get("create_executable", Type.BOOLEAN);
+    Set<Artifact> sourceFiles = ImmutableSet.copyOf(javaCommon.getSrcsArtifacts());
+
+    if (!createExecutable) {
+      return null;
+    }
+
+    boolean useTestrunner = ruleContext.attributes().get("use_testrunner", Type.BOOLEAN);
+
+    String testClass = ruleContext.getRule().isAttrDefined("test_class", Type.STRING)
+        ? ruleContext.attributes().get("test_class", Type.STRING) : "";
+
+    if (useTestrunner) {
+      if (testClass.isEmpty()) {
+        testClass = javaCommon.determinePrimaryClass(sourceFiles);
+        if (testClass == null) {
+          ruleContext.ruleError("cannot determine junit.framework.Test class "
+                    + "(Found no source file '" + ruleContext.getTarget().getName()
+                    + ".java' and package name doesn't include 'java' or 'javatests'. "
+                    + "You might want to rename the rule or add a 'test_class' "
+                    + "attribute.)");
+        }
+      }
+      return testClass;
+    } else {
+      if (!testClass.isEmpty()) {
+        ruleContext.attributeError("test_class", "this attribute is only meaningful to "
+            + "BazelTestRunner, but you are not using it (use_testrunner = 0)");
+      }
+
+      return getMainClassInternal(ruleContext, javaCommon);
+    }
+  }
+  
+  private String getPrimaryClass(RuleContext ruleContext, JavaCommon javaCommon) {
+    return useLegacyJavaTest(ruleContext) ? getPrimaryClassLegacy(ruleContext, javaCommon)
+        : getPrimaryClassNew(ruleContext, javaCommon);
+  }
   
   @Override
-  public Iterable<String> getJvmFlags(RuleContext ruleContext, JavaCommon javaCommon,
-      Artifact launcher, List<String> userJvmFlags) {
-    return userJvmFlags;
+  public Iterable<String> getJvmFlags(
+      RuleContext ruleContext, JavaCommon javaCommon, List<String> userJvmFlags) {
+    ImmutableList.Builder<String> jvmFlags = ImmutableList.builder();
+    jvmFlags.addAll(userJvmFlags);
+
+    if (!useLegacyJavaTest(ruleContext)) {
+      if (ruleContext.attributes().get("use_testrunner", Type.BOOLEAN)) {
+        String testClass = ruleContext.getRule().isAttrDefined("test_class", Type.STRING)
+            ? ruleContext.attributes().get("test_class", Type.STRING) : "";
+        if (testClass.isEmpty()) {
+          testClass = javaCommon.determinePrimaryClass(javaCommon.getSrcsArtifacts());
+        }
+
+        if (testClass == null) {
+          ruleContext.ruleError("cannot determine test class");
+        } else {
+          // Always run junit tests with -ea (enable assertion)
+          jvmFlags.add("-ea");
+          // "suite" is a misnomer.
+          jvmFlags.add("-Dbazel.test_suite=" +  ShellEscaper.escapeString(testClass));
+        }
+      }
+    }
+
+    return jvmFlags.build();
   }
 
   @Override
@@ -259,11 +368,6 @@ public class BazelJavaSemantics implements JavaSemantics {
       Artifact executable, Artifact instrumentationMetadata,
       JavaCompilationArtifacts.Builder javaArtifactsBuilder, String mainClass) {
     return mainClass;
-  }
-
-  @Override
-  public boolean useStrictJavaDeps(BuildConfiguration configuration) {
-    return true;
   }
 
   @Override
@@ -310,7 +414,7 @@ public class BazelJavaSemantics implements JavaSemantics {
   }
 
   @Override
-  public PathFragment getJavaResourcePath(PathFragment path) {
+  public PathFragment getDefaultJavaResourcePath(PathFragment path) {
     // Look for src/.../resources to match Maven repository structure.
     for (int i = 0; i < path.segmentCount() - 2; ++i) {
       if (path.getSegment(i).equals("src") && path.getSegment(i + 2).equals("resources")) {
@@ -324,20 +428,27 @@ public class BazelJavaSemantics implements JavaSemantics {
   @Override
   public List<String> getExtraArguments(RuleContext ruleContext, JavaCommon javaCommon) {
     if (ruleContext.getRule().getRuleClass().equals("java_test")) {
-      if (ruleContext.getConfiguration().getTestArguments().isEmpty()
-          && !ruleContext.attributes().isAttributeValueExplicitlySpecified("args")) {
-        ImmutableList.Builder<String> builder = ImmutableList.builder();
-        for (Artifact artifact : javaCommon.getSrcsArtifacts()) {
-          PathFragment path = artifact.getRootRelativePath();
-          String className = JavaUtil.getJavaFullClassname(FileSystemUtils.removeExtension(path));
-          if (className != null) {
-            builder.add(className);
+      if (useLegacyJavaTest(ruleContext)) {
+        if (ruleContext.getConfiguration().getTestArguments().isEmpty()
+            && !ruleContext.attributes().isAttributeValueExplicitlySpecified("args")) {
+          ImmutableList.Builder<String> builder = ImmutableList.builder();
+          for (Artifact artifact : javaCommon.getSrcsArtifacts()) {
+            PathFragment path = artifact.getRootRelativePath();
+            String className = JavaUtil.getJavaFullClassname(FileSystemUtils.removeExtension(path));
+            if (className != null) {
+              builder.add(className);
+            }
           }
+          return builder.build();
         }
-        return builder.build();
       }
     }
     return ImmutableList.<String>of();
+  }
+
+  private boolean useLegacyJavaTest(RuleContext ruleContext) {
+    return !ruleContext.attributes().isAttributeValueExplicitlySpecified("test_class")
+        && ruleContext.getFragment(JavaConfiguration.class).useLegacyBazelJavaTest();
   }
 
   @Override

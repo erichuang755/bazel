@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,9 +19,12 @@ package blaze;
 
 option java_package = "com.google.devtools.build.lib.ideinfo.androidstudio";
 
+option java_generate_equals_and_hash = true;
+
 message ArtifactLocation {
   string root_path = 1;
   string relative_path = 2;
+  bool is_source = 3;
 }
 
 message LibraryArtifact {
@@ -37,10 +40,19 @@ message JavaRuleIdeInfo {
   repeated ArtifactLocation sources = 4;
 }
 
+message AndroidRuleIdeInfo {
+  repeated ArtifactLocation resources = 1;
+  ArtifactLocation apk = 3;
+  repeated ArtifactLocation dependency_apk = 4;
+  ArtifactLocation manifest= 5;
+  string java_package = 7;
+  bool has_idl_sources = 8;
+  LibraryArtifact idl_jar = 9;
+  bool generate_resource_class = 10;
+}
+
 message AndroidSdkRuleInfo {
   string android_sdk_path = 1;
-  string genfiles_path = 2;
-  string bin_path = 3;
 }
 
 message RuleIdeInfo {
@@ -52,19 +64,24 @@ message RuleIdeInfo {
     JAVA_LIBRARY = 4;
     JAVA_TEST = 5;
     JAVA_IMPORT = 6;
-    PROTO_LIBRARY = 7;
-    ANDROID_SDK = 8;
+    JAVA_BINARY = 7;
+    PROTO_LIBRARY = 8;
+    ANDROID_SDK = 9;
+    JAVA_PLUGIN = 10;
   }
 
   string label = 1;
   Kind kind = 2;
   string build_file = 3;
   repeated string dependencies = 4;
-  repeated string transitive_dependencies = 5;
-
-  // kind is one of JAVA_LIBRARY, JAVA_TEST, JAVA_IMPORT
-  JavaRuleIdeInfo java_rule_ide_info = 6;
 
   // kind is ANDROID_SDK
-  AndroidSdkRuleInfo android_sdk_rule_info = 7;
+  AndroidSdkRuleInfo android_sdk_rule_info = 6;
+
+  // kind is one of {JAVA,ANDROID}_{LIBRARY,BINARY,TEST} and JAVA_IMPORT
+  JavaRuleIdeInfo java_rule_ide_info = 7;
+  AndroidRuleIdeInfo android_rule_ide_info = 8;
+
+  repeated string tags = 9;
+  repeated string runtime_deps = 10;
 }

@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,6 @@
 
 package com.google.devtools.build.lib.analysis;
 
-import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
 import com.google.common.collect.ImmutableCollection;
 import com.google.common.collect.ImmutableList;
@@ -40,6 +39,7 @@ import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration.Fragment;
 import com.google.devtools.build.lib.analysis.config.ConfigMatchingProvider;
 import com.google.devtools.build.lib.analysis.config.FragmentCollection;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.ImmutableSortedKeyListMultimap;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
@@ -49,7 +49,10 @@ import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.Attribute.ConfigurationTransition;
 import com.google.devtools.build.lib.packages.Attribute.SplitTransition;
 import com.google.devtools.build.lib.packages.AttributeMap;
+import com.google.devtools.build.lib.packages.BuildType;
+import com.google.devtools.build.lib.packages.ConfigurationFragmentPolicy;
 import com.google.devtools.build.lib.packages.FileTarget;
+import com.google.devtools.build.lib.packages.FilesetEntry;
 import com.google.devtools.build.lib.packages.ImplicitOutputsFunction;
 import com.google.devtools.build.lib.packages.InputFile;
 import com.google.devtools.build.lib.packages.OutputFile;
@@ -60,13 +63,12 @@ import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.packages.RuleErrorConsumer;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.packages.TargetUtils;
-import com.google.devtools.build.lib.packages.Type;
 import com.google.devtools.build.lib.rules.fileset.FilesetProvider;
 import com.google.devtools.build.lib.shell.ShellUtils;
 import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.FilesetEntry;
-import com.google.devtools.build.lib.syntax.Label;
+import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.util.FileTypeSet;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
 
@@ -134,34 +136,53 @@ public final class RuleContext extends TargetContext
   private final Set<ConfigMatchingProvider> configConditions;
   private final AttributeMap attributes;
   private final ImmutableSet<String> features;
-  private final Map<String, Attribute> attributeMap;
+  private final String ruleClassNameForLogging;
+  private final ImmutableMap<String, Attribute> aspectAttributes;
   private final BuildConfiguration hostConfiguration;
+  private final ConfigurationFragmentPolicy configurationFragmentPolicy;
+  private final Class<? extends BuildConfiguration.Fragment> universalFragment;
+  private final ErrorReporter reporter;
 
   private ActionOwner actionOwner;
 
   /* lazily computed cache for Make variables, computed from the above. See get... method */
   private transient ConfigurationMakeVariableContext configurationMakeVariableContext = null;
 
-  private RuleContext(Builder builder, ListMultimap<String, ConfiguredTarget> targetMap,
+  private RuleContext(
+      Builder builder,
+      ListMultimap<String, ConfiguredTarget> targetMap,
       ListMultimap<String, ConfiguredFilesetEntry> filesetEntryMap,
-      Set<ConfigMatchingProvider> configConditions, Map<String, Attribute> attributeMap) {
+      Set<ConfigMatchingProvider> configConditions,
+      Class<? extends BuildConfiguration.Fragment> universalFragment,
+      String ruleClassNameForLogging,
+      ImmutableMap<String, Attribute> aspectAttributes) {
     super(builder.env, builder.rule, builder.configuration, builder.prerequisiteMap.get(null),
         builder.visibility);
     this.rule = builder.rule;
+    this.configurationFragmentPolicy = builder.configurationFragmentPolicy;
+    this.universalFragment = universalFragment;
     this.targetMap = targetMap;
     this.filesetEntryMap = filesetEntryMap;
     this.configConditions = configConditions;
     this.attributes =
         ConfiguredAttributeMapper.of(builder.rule, configConditions);
     this.features = getEnabledFeatures();
-    this.attributeMap = attributeMap;
+    this.ruleClassNameForLogging = ruleClassNameForLogging;
+    this.aspectAttributes = aspectAttributes;
     this.hostConfiguration = builder.hostConfiguration;
+    reporter = builder.reporter;
   }
 
   private ImmutableSet<String> getEnabledFeatures() {
     Set<String> globallyEnabled = new HashSet<>();
     Set<String> globallyDisabled = new HashSet<>();
     parseFeatures(getConfiguration().getDefaultFeatures(), globallyEnabled, globallyDisabled);
+    for (ImmutableMap.Entry<Class<? extends Fragment>, Fragment> entry :
+        getConfiguration().getAllFragments().entrySet()) {
+      if (isLegalFragment(entry.getKey())) {
+        globallyEnabled.addAll(entry.getValue().configurationEnabledFeatures(this));
+      }
+    }
     Set<String> packageEnabled = new HashSet<>();
     Set<String> packageDisabled = new HashSet<>();
     parseFeatures(getRule().getPackage().getFeatures(), packageEnabled, packageDisabled);
@@ -197,6 +218,13 @@ public final class RuleContext extends TargetContext
   }
 
   /**
+   * Returns a rule class name suitable for log messages, including an aspect name if applicable.
+   */
+  public String getRuleClassNameForLogging() {
+    return ruleClassNameForLogging;
+  }
+
+  /**
    * Returns the workspace name for the rule.
    */
   public String getWorkspaceName() {
@@ -215,6 +243,13 @@ public final class RuleContext extends TargetContext
    */
   public BuildConfiguration getHostConfiguration() {
     return hostConfiguration;
+  }
+
+  /**
+   * Attributes from aspects.
+   */
+  public ImmutableMap<String, Attribute> getAspectAttributes() {
+    return aspectAttributes;
   }
 
   /**
@@ -270,9 +305,9 @@ public final class RuleContext extends TargetContext
     Preconditions.checkArgument(isLegalFragment(fragment, config),
         "%s has to declare '%s' as a required fragment "
         + "in %s configuration in order to access it.%s",
-        rule.getRuleClass(), name, FragmentCollection.getConfigurationName(config),
+        getRuleClassNameForLogging(), name, FragmentCollection.getConfigurationName(config),
         additionalErrorMessage);
-    return getConfiguration().getFragment(fragment);
+    return getConfiguration(config).getFragment(fragment);
   }
 
   @Nullable
@@ -283,7 +318,8 @@ public final class RuleContext extends TargetContext
 
   @Nullable
   public Fragment getSkylarkFragment(String name, ConfigurationTransition config) {
-    Class<? extends Fragment> fragmentClass = getConfiguration().getSkylarkFragmentByName(name);
+    Class<? extends Fragment> fragmentClass =
+        getConfiguration(config).getSkylarkFragmentByName(name);
     if (fragmentClass == null) {
       return null;
     }
@@ -301,7 +337,8 @@ public final class RuleContext extends TargetContext
 
   public <T extends Fragment> boolean isLegalFragment(
       Class<T> fragment, ConfigurationTransition config) {
-    return rule.getRuleClassObject().isLegalConfigurationFragment(fragment, config);
+    return fragment == universalFragment
+        || configurationFragmentPolicy.isLegalConfigurationFragment(fragment, config);
   }
 
   public <T extends Fragment> boolean isLegalFragment(Class<T> fragment) {
@@ -384,7 +421,7 @@ public final class RuleContext extends TargetContext
    */
   @Override
   public void ruleError(String message) {
-    reportError(rule.getLocation(), prefixRuleMessage(message));
+    reporter.ruleError(message);
   }
 
   /**
@@ -393,7 +430,7 @@ public final class RuleContext extends TargetContext
    */
   @Override
   public void ruleWarning(String message) {
-    reportWarning(rule.getLocation(), prefixRuleMessage(message));
+    reporter.ruleWarning(message);
   }
 
   /**
@@ -405,11 +442,7 @@ public final class RuleContext extends TargetContext
    */
   @Override
   public void attributeError(String attrName, String message) {
-    reportError(rule.getAttributeLocation(attrName),
-        prefixAttributeMessage(Attribute.isImplicit(attrName)
-                ? "(an implicit dependency)"
-                : attrName,
-            message));
+    reporter.attributeError(attrName, message);
   }
 
   /**
@@ -420,30 +453,7 @@ public final class RuleContext extends TargetContext
    */
   @Override
   public void attributeWarning(String attrName, String message) {
-    reportWarning(rule.getAttributeLocation(attrName),
-        prefixAttributeMessage(Attribute.isImplicit(attrName)
-                ? "(an implicit dependency)"
-                : attrName,
-            message));
-  }
-
-  private String prefixAttributeMessage(String attrName, String message) {
-    return "in " + attrName + " attribute of "
-           + rule.getRuleClass() + " rule "
-           + getLabel() + ": " + message;
-  }
-
-  private String prefixRuleMessage(String message) {
-    return "in " + rule.getRuleClass() + " rule "
-           + getLabel() + ": " + message;
-  }
-
-  private void reportError(Location location, String message) {
-    getAnalysisEnvironment().getEventHandler().handle(Event.error(location, message));
-  }
-
-  private void reportWarning(Location location, String message) {
-    getAnalysisEnvironment().getEventHandler().handle(Event.warn(location, message));
+    reporter.attributeWarning(attrName, message);
   }
 
   /**
@@ -570,17 +580,17 @@ public final class RuleContext extends TargetContext
     return getDerivedArtifact(getUniqueDirectory(uniqueDirectory).getRelative(relative), root);
   }
 
-  private Attribute getAttribute(String attributeName) {
-    // TODO(bazel-team): We should check original rule for such attribute first, because aspect
-    // can't contain empty attribute. Consider changing type of prerequisiteMap from
-    // ListMultimap<Attribute, ConfiguredTarget> to Map<Attribute, List<ConfiguredTarget>>. This can
-    // also simplify logic in DependencyResolver#resolveExplicitAttributes.
+  /**
+   * Returns the Attribute associated with this name, if it's a valid attribute for this rule,
+   * or is associated with an attached aspect. Otherwise returns null.
+   */
+  @Nullable
+  public Attribute getAttribute(String attributeName) {
     Attribute result = getRule().getAttributeDefinition(attributeName);
     if (result != null) {
       return result;
     }
-    // Also this attribute can come from aspects, so we also have to check attributeMap.
-    return attributeMap.get(attributeName);
+    return aspectAttributes.get(attributeName);
   }
 
   /**
@@ -688,8 +698,8 @@ public final class RuleContext extends TargetContext
     checkAttribute(attributeName, mode);
     List<? extends TransitiveInfoCollection> elements = targetMap.get(attributeName);
     if (elements.size() > 1) {
-      throw new IllegalStateException(rule.getRuleClass() + " attribute " + attributeName
-          + " produces more then one prerequisites");
+      throw new IllegalStateException(getRuleClassNameForLogging() + " attribute " + attributeName
+          + " produces more than one prerequisite");
     }
     return elements.isEmpty() ? null : elements.get(0);
   }
@@ -731,11 +741,11 @@ public final class RuleContext extends TargetContext
     Attribute ruleDefinition = getAttribute(attributeName);
 
     if (ruleDefinition == null) {
-      throw new IllegalStateException(getRule().getRuleClass() + " attribute " + attributeName
+      throw new IllegalStateException(getRuleClassNameForLogging() + " attribute " + attributeName
           + " is not defined");
     }
     if (!ruleDefinition.isExecutable()) {
-      throw new IllegalStateException(getRule().getRuleClass() + " attribute " + attributeName
+      throw new IllegalStateException(getRuleClassNameForLogging() + " attribute " + attributeName
           + " is not configured to be executable");
     }
 
@@ -887,36 +897,36 @@ public final class RuleContext extends TargetContext
   private void checkAttribute(String attributeName, Mode mode) {
     Attribute attributeDefinition = getAttribute(attributeName);
     if (attributeDefinition == null) {
-      throw new IllegalStateException(getRule().getLocation() + ": " + getRule().getRuleClass()
+      throw new IllegalStateException(getRule().getLocation() + ": " + getRuleClassNameForLogging()
         + " attribute " + attributeName + " is not defined");
     }
-    if (!(attributeDefinition.getType() == Type.LABEL
-        || attributeDefinition.getType() == Type.LABEL_LIST)) {
-      throw new IllegalStateException(rule.getRuleClass() + " attribute " + attributeName
+    if (!(attributeDefinition.getType() == BuildType.LABEL
+        || attributeDefinition.getType() == BuildType.LABEL_LIST)) {
+      throw new IllegalStateException(getRuleClassNameForLogging() + " attribute " + attributeName
         + " is not a label type attribute");
     }
     if (mode == Mode.HOST) {
       if (attributeDefinition.getConfigurationTransition() != ConfigurationTransition.HOST) {
         throw new IllegalStateException(getRule().getLocation() + ": "
-            + getRule().getRuleClass() + " attribute " + attributeName
+            + getRuleClassNameForLogging() + " attribute " + attributeName
             + " is not configured for the host configuration");
       }
     } else if (mode == Mode.TARGET) {
       if (attributeDefinition.getConfigurationTransition() != ConfigurationTransition.NONE) {
         throw new IllegalStateException(getRule().getLocation() + ": "
-            + getRule().getRuleClass() + " attribute " + attributeName
+            + getRuleClassNameForLogging() + " attribute " + attributeName
             + " is not configured for the target configuration");
       }
     } else if (mode == Mode.DATA) {
       if (attributeDefinition.getConfigurationTransition() != ConfigurationTransition.DATA) {
         throw new IllegalStateException(getRule().getLocation() + ": "
-            + getRule().getRuleClass() + " attribute " + attributeName
+            + getRuleClassNameForLogging() + " attribute " + attributeName
             + " is not configured for the data configuration");
       }
     } else if (mode == Mode.SPLIT) {
       if (!(attributeDefinition.getConfigurationTransition() instanceof SplitTransition)) {
         throw new IllegalStateException(getRule().getLocation() + ": "
-            + getRule().getRuleClass() + " attribute " + attributeName
+            + getRuleClassNameForLogging() + " attribute " + attributeName
             + " is not configured for a split transition");
       }
     }
@@ -929,12 +939,12 @@ public final class RuleContext extends TargetContext
   public Mode getAttributeMode(String attributeName) {
     Attribute attributeDefinition = getAttribute(attributeName);
     if (attributeDefinition == null) {
-      throw new IllegalStateException(getRule().getLocation() + ": " + getRule().getRuleClass()
+      throw new IllegalStateException(getRule().getLocation() + ": " + getRuleClassNameForLogging()
         + " attribute " + attributeName + " is not defined");
     }
-    if (!(attributeDefinition.getType() == Type.LABEL
-        || attributeDefinition.getType() == Type.LABEL_LIST)) {
-      throw new IllegalStateException(rule.getRuleClass() + " attribute " + attributeName
+    if (!(attributeDefinition.getType() == BuildType.LABEL
+        || attributeDefinition.getType() == BuildType.LABEL_LIST)) {
+      throw new IllegalStateException(getRuleClassNameForLogging() + " attribute " + attributeName
         + " is not a label type attribute");
     }
     if (attributeDefinition.getConfigurationTransition() == ConfigurationTransition.HOST) {
@@ -947,7 +957,7 @@ public final class RuleContext extends TargetContext
       return Mode.SPLIT;
     }
     throw new IllegalStateException(getRule().getLocation() + ": "
-        + getRule().getRuleClass() + " attribute " + attributeName + " is not configured");
+        + getRuleClassNameForLogging() + " attribute " + attributeName + " is not configured");
   }
 
   /**
@@ -1016,7 +1026,7 @@ public final class RuleContext extends TargetContext
   }
 
   public Artifact getSingleSource() {
-    return getSingleSource(getRule().getRuleClass() + " source file");
+    return getSingleSource(getRuleClassNameForLogging() + " source file");
   }
 
   /**
@@ -1066,7 +1076,7 @@ public final class RuleContext extends TargetContext
    * referring to a local target. Reports a warning otherwise.
    */
   public Label getLocalNodepLabelAttribute(String attrName) {
-    Label label = attributes().get(attrName, Type.NODEP_LABEL);
+    Label label = attributes().get(attrName, BuildType.NODEP_LABEL);
     if (label == null) {
       return null;
     }
@@ -1112,7 +1122,7 @@ public final class RuleContext extends TargetContext
    *         attribute
    */
   public final FilesToRunProvider getCompiler(boolean warnIfNotDefault) {
-    Label label = attributes().get("compiler", Type.LABEL);
+    Label label = attributes().get("compiler", BuildType.LABEL);
     if (warnIfNotDefault && !label.equals(getRule().getAttrDefaultValue("compiler"))) {
       attributeWarning("compiler", "setting the compiler is strongly discouraged");
     }
@@ -1215,7 +1225,7 @@ public final class RuleContext extends TargetContext
     // Check visibility attribute
     for (PackageSpecification specification :
       prerequisite.getProvider(VisibilityProvider.class).getVisibility()) {
-      if (specification.containsPackage(rule.getLabel().getPackageFragment())) {
+      if (specification.containsPackage(rule.getLabel().getPackageIdentifier())) {
         return true;
       }
     }
@@ -1230,27 +1240,45 @@ public final class RuleContext extends TargetContext
     return features;
   }
 
+  @Override
+  public String toString() {
+    return "RuleContext(" + getLabel() + ", " + getConfiguration() + ")";
+  }
+
   /**
    * Builder class for a RuleContext.
    */
-  public static final class Builder {
+  public static final class Builder implements RuleErrorConsumer  {
     private final AnalysisEnvironment env;
     private final Rule rule;
+    private final ConfigurationFragmentPolicy configurationFragmentPolicy;
+    private Class<? extends BuildConfiguration.Fragment> universalFragment;
     private final BuildConfiguration configuration;
     private final BuildConfiguration hostConfiguration;
     private final PrerequisiteValidator prerequisiteValidator;
+    @Nullable private final String aspectName;
+    private final ErrorReporter reporter;
     private ListMultimap<Attribute, ConfiguredTarget> prerequisiteMap;
     private Set<ConfigMatchingProvider> configConditions;
     private NestedSet<PackageSpecification> visibility;
+    private ImmutableMap<String, Attribute> aspectAttributes;
 
-    Builder(AnalysisEnvironment env, Rule rule, BuildConfiguration configuration,
+    Builder(
+        AnalysisEnvironment env,
+        Rule rule,
+        @Nullable String aspectName,
+        BuildConfiguration configuration,
         BuildConfiguration hostConfiguration,
-        PrerequisiteValidator prerequisiteValidator) {
+        PrerequisiteValidator prerequisiteValidator,
+        ConfigurationFragmentPolicy configurationFragmentPolicy) {
       this.env = Preconditions.checkNotNull(env);
       this.rule = Preconditions.checkNotNull(rule);
+      this.aspectName = aspectName;
+      this.configurationFragmentPolicy = Preconditions.checkNotNull(configurationFragmentPolicy);
       this.configuration = Preconditions.checkNotNull(configuration);
       this.hostConfiguration = Preconditions.checkNotNull(hostConfiguration);
       this.prerequisiteValidator = prerequisiteValidator;
+      reporter = new ErrorReporter(env, rule, getRuleClassNameForLogging());
     }
 
     RuleContext build() {
@@ -1260,14 +1288,14 @@ public final class RuleContext extends TargetContext
       ListMultimap<String, ConfiguredTarget> targetMap = createTargetMap();
       ListMultimap<String, ConfiguredFilesetEntry> filesetEntryMap =
           createFilesetEntryMap(rule, configConditions);
-      Map<String, Attribute> attributeMap = new HashMap<>();
-      for (Attribute attribute : prerequisiteMap.keySet()) {
-        if (attribute == null) {
-          continue;
-        }
-        attributeMap.put(attribute.getName(), attribute);
-      }
-      return new RuleContext(this, targetMap, filesetEntryMap, configConditions, attributeMap);
+      return new RuleContext(
+          this,
+          targetMap,
+          filesetEntryMap,
+          configConditions,
+          universalFragment,
+          getRuleClassNameForLogging(),
+          aspectAttributes != null ? aspectAttributes : ImmutableMap.<String, Attribute>of());
     }
 
     Builder setVisibility(NestedSet<PackageSpecification> visibility) {
@@ -1285,11 +1313,31 @@ public final class RuleContext extends TargetContext
     }
 
     /**
+     * Adds attributes which are defined by an Aspect (and not by RuleClass).
+     */
+    Builder setAspectAttributes(Map<String, Attribute> aspectAttributes) {
+      this.aspectAttributes = ImmutableMap.copyOf(aspectAttributes);
+      return this;
+    }
+
+    /**
      * Sets the configuration conditions needed to determine which paths to follow for this
      * rule's configurable attributes.
      */
     Builder setConfigConditions(Set<ConfigMatchingProvider> configConditions) {
       this.configConditions = Preconditions.checkNotNull(configConditions);
+      return this;
+    }
+
+    /**
+     * Sets the fragment that can be legally accessed even when not explicitly declared.
+     */
+    Builder setUniversalFragment(Class<? extends BuildConfiguration.Fragment> fragment) {
+      // TODO(bazel-team): Add this directly to ConfigurationFragmentPolicy, so we
+      // don't need separate logic specifically for checking this fragment. The challenge is
+      // that we need RuleClassProvider to figure out what this fragment is, and not every
+      // call state that creates ConfigurationFragmentPolicy has access to that.
+      this.universalFragment = fragment;
       return this;
     }
 
@@ -1327,7 +1375,7 @@ public final class RuleContext extends TargetContext
       final ImmutableSortedKeyListMultimap.Builder<String, ConfiguredFilesetEntry> mapBuilder =
           ImmutableSortedKeyListMultimap.builder();
       for (Attribute attr : rule.getAttributes()) {
-        if (attr.getType() != Type.FILESET_ENTRY_LIST) {
+        if (attr.getType() != BuildType.FILESET_ENTRY_LIST) {
           continue;
         }
         String attributeName = attr.getName();
@@ -1336,7 +1384,7 @@ public final class RuleContext extends TargetContext
           ctMap.put(prerequisite.getLabel(), prerequisite);
         }
         List<FilesetEntry> entries = ConfiguredAttributeMapper.of(rule, configConditions)
-            .get(attributeName, Type.FILESET_ENTRY_LIST);
+            .get(attributeName, BuildType.FILESET_ENTRY_LIST);
         for (FilesetEntry entry : entries) {
           if (entry.getFiles() == null) {
             Label label = entry.getSrcLabel();
@@ -1398,41 +1446,32 @@ public final class RuleContext extends TargetContext
       return mapBuilder.build();
     }
 
-    private String prefixRuleMessage(String message) {
-      return String.format("in %s rule %s: %s", rule.getRuleClass(), rule.getLabel(), message);
-    }
-
-    private String maskInternalAttributeNames(String name) {
-      return Attribute.isImplicit(name) ? "(an implicit dependency)" : name;
-    }
-
-    private String prefixAttributeMessage(String attrName, String message) {
-      return String.format("in %s attribute of %s rule %s: %s",
-          maskInternalAttributeNames(attrName), rule.getRuleClass(), rule.getLabel(), message);
-    }
-
     public void reportError(Location location, String message) {
-      env.getEventHandler().handle(Event.error(location, message));
+      reporter.reportError(location, message);
     }
 
+    @Override
     public void ruleError(String message) {
-      reportError(rule.getLocation(), prefixRuleMessage(message));
+      reporter.ruleError(message);
     }
 
+    @Override
     public void attributeError(String attrName, String message) {
-      reportError(rule.getAttributeLocation(attrName), prefixAttributeMessage(attrName, message));
+      reporter.attributeError(attrName, message);
     }
 
     public void reportWarning(Location location, String message) {
-      env.getEventHandler().handle(Event.warn(location, message));
+      reporter.reportWarning(location, message);
     }
 
+    @Override
     public void ruleWarning(String message) {
-      env.getEventHandler().handle(Event.warn(rule.getLocation(), prefixRuleMessage(message)));
+      reporter.ruleWarning(message);
     }
 
+    @Override
     public void attributeWarning(String attrName, String message) {
-      reportWarning(rule.getAttributeLocation(attrName), prefixAttributeMessage(attrName, message));
+      reporter.attributeWarning(attrName, message);
     }
 
     private void reportBadPrerequisite(Attribute attribute, String targetKind,
@@ -1503,6 +1542,15 @@ public final class RuleContext extends TargetContext
       return rule;
     }
 
+    /**
+     * Returns a rule class name suitable for log messages, including an aspect name if applicable.
+     */
+    public String getRuleClassNameForLogging() {
+      return aspectName != null
+          ? aspectName + " aspect on " + rule.getRuleClass()
+          : rule.getRuleClass();
+    }
+
     public BuildConfiguration getConfiguration() {
       return configuration;
     }
@@ -1553,7 +1601,7 @@ public final class RuleContext extends TargetContext
           }
         }
         attributeError(attribute.getName(), "'" + prerequisite.getLabel()
-            + "' does not produce any " + rule.getRuleClass() + " " + attribute.getName()
+            + "' does not produce any " + getRuleClassNameForLogging() + " " + attribute.getName()
             + " files (expected " + allowedFileTypes + ")");
       }
     }
@@ -1571,14 +1619,92 @@ public final class RuleContext extends TargetContext
       validateDirectPrerequisiteType(prerequisite, attribute);
       validateDirectPrerequisiteFileTypes(prerequisite, attribute);
       validateMandatoryProviders(prerequisite, attribute);
-      if (attribute.performConstraintsCheck()) {
+      if (attribute.performPrereqValidatorCheck()) {
         prerequisiteValidator.validate(this, prerequisite, attribute);
       }
     }
   }
 
-  @Override
-  public String toString() {
-    return "RuleContext(" + getLabel() + ", " + getConfiguration() + ")";
+  /**
+   * Helper class for reporting errors and warnings.
+   */
+  public static final class ErrorReporter implements RuleErrorConsumer {
+    private final AnalysisEnvironment env;
+    private final Rule rule;
+    private final String ruleClassNameForLogging;
+
+    ErrorReporter(AnalysisEnvironment env, Rule rule, String ruleClassNameForLogging) {
+      this.env = env;
+      this.rule = rule;
+      this.ruleClassNameForLogging = ruleClassNameForLogging;
+    }
+
+    public void reportError(Location location, String message) {
+      env.getEventHandler().handle(Event.error(location, message));
+    }
+
+    @Override
+    public void ruleError(String message) {
+      reportError(rule.getLocation(), prefixRuleMessage(message));
+    }
+
+    @Override
+    public void attributeError(String attrName, String message) {
+      reportError(rule.getAttributeLocation(attrName), completeAttributeMessage(attrName, message));
+    }
+
+    public void reportWarning(Location location, String message) {
+      env.getEventHandler().handle(Event.warn(location, message));
+    }
+
+    @Override
+    public void ruleWarning(String message) {
+      env.getEventHandler().handle(Event.warn(rule.getLocation(), prefixRuleMessage(message)));
+    }
+
+    @Override
+    public void attributeWarning(String attrName, String message) {
+      reportWarning(
+          rule.getAttributeLocation(attrName), completeAttributeMessage(attrName, message));
+    }
+
+    private String prefixRuleMessage(String message) {
+      return String.format(
+          "in %s rule %s: %s", getRuleClassNameForLogging(), rule.getLabel(), message);
+    }
+
+    private String maskInternalAttributeNames(String name) {
+      return Attribute.isImplicit(name) ? "(an implicit dependency)" : name;
+    }
+
+    /**
+     * Prefixes the given message with details about the rule and appends details about the macro
+     * that created this rule, if applicable.
+     */
+    private String completeAttributeMessage(String attrName, String message) {
+      // Appends a note to the given message if the offending rule was created by a macro.
+      String macroMessageAppendix =
+          rule.wasCreatedByMacro()
+              ? String.format(
+                  ". Since this rule was created by the macro '%s', the error might have been "
+                  + "caused by the macro implementation in %s",
+                  getGeneratorFunction(), rule.getAttributeLocationWithoutMacro(attrName))
+              : "";
+
+      return String.format("in %s attribute of %s rule %s: %s%s",
+          maskInternalAttributeNames(attrName), getRuleClassNameForLogging(), rule.getLabel(),
+          message, macroMessageAppendix);
+    }
+
+    /**
+     * Returns a rule class name suitable for log messages, including an aspect name if applicable.
+     */
+    private String getRuleClassNameForLogging() {
+      return ruleClassNameForLogging;
+    }
+
+    private String getGeneratorFunction() {
+      return (String) rule.getAttributeContainer().getAttr("generator_function");
+    }
   }
 }

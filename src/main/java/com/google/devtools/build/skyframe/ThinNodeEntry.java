@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,12 +14,13 @@
 package com.google.devtools.build.skyframe;
 
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
+import com.google.devtools.build.lib.util.Preconditions;
 
 import javax.annotation.Nullable;
 
 /**
  * A node in the graph without the means to access its value. All operations on this class are
- * thread-safe.
+ * thread-safe. Note, however, the warning on the return value of {@link #markDirty}.
  *
  * <p>This interface is public only for the benefit of alternative graph implementations outside of
  * the package.
@@ -47,6 +48,15 @@ public interface ThinNodeEntry {
    */
   @ThreadSafe
   void removeReverseDep(SkyKey reverseDep);
+
+  /**
+   * Removes a reverse dependency.
+   *
+   * <p>May only be called if this entry is not done (i.e. {@link #isDone} is false) and
+   * {@param reverseDep} is present in {@link #getReverseDeps}
+   */
+  @ThreadSafe
+  void removeInProgressReverseDep(SkyKey reverseDep);
 
   /**
    * Returns a copy of the set of reverse dependencies. Note that this introduces a potential
@@ -80,11 +90,35 @@ public interface ThinNodeEntry {
    * the caller will only ever want to call {@code markDirty()} a second time if a transition from a
    * dirty-unchanged state to a dirty-changed state is required.
    *
-   * @return The direct deps of this entry, or null if the entry has already been marked
-   * dirty. In the latter case, the caller should abort its handling of this node, since another
-   * thread is already dealing with it.
+   * @return A {@link ThinNodeEntry.MarkedDirtyResult} if the node was previously clean, and
+   * {@code null} if it was already dirty. If it was already dirty, the caller should abort its
+   * handling of this node, since another thread is already dealing with it. Note the warning on
+   * {@link ThinNodeEntry.MarkedDirtyResult} regarding the collection it provides.
    */
   @Nullable
   @ThreadSafe
-  Iterable<SkyKey> markDirty(boolean isChanged);
+  MarkedDirtyResult markDirty(boolean isChanged);
+
+  /**
+   * Returned by {@link #markDirty} if that call changed the node from clean to dirty. Contains an
+   * iterable of the node's reverse deps for efficiency, because the single use case for {@link
+   * #markDirty} is during invalidation, and if such an invalidation call wins, the invalidator
+   * must immediately afterwards schedule the invalidation of the node's reverse deps.
+   *
+   * <p>Warning: {@link #getReverseDepsUnsafe()} may return a live view of the reverse deps
+   * collection of the marked-dirty node. The consumer of this data must be careful only to
+   * iterate over and consume its values while that collection is guaranteed not to change. This
+   * is true during invalidation, because reverse deps don't change during invalidation.
+   */
+  class MarkedDirtyResult {
+    private final Iterable<SkyKey> reverseDepsUnsafe;
+
+    public MarkedDirtyResult(Iterable<SkyKey> reverseDepsUnsafe) {
+      this.reverseDepsUnsafe = Preconditions.checkNotNull(reverseDepsUnsafe);
+    }
+
+    public Iterable<SkyKey> getReverseDepsUnsafe() {
+      return reverseDepsUnsafe;
+    }
+  }
 }

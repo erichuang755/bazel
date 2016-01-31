@@ -1,5 +1,8 @@
 # Description:
 #   The Bazel launcher.
+package(
+    default_visibility = ["//visibility:public"],
+)
 
 cc_library(
     name = "blaze_util",
@@ -10,9 +13,16 @@ cc_library(
             "blaze_util_darwin.cc",
             "blaze_util_posix.cc",
         ],
+        "//src:darwin_x86_64": [
+            "blaze_util_darwin.cc",
+            "blaze_util_posix.cc",
+        ],
         "//src:freebsd": [
             "blaze_util_freebsd.cc",
             "blaze_util_posix.cc",
+        ],
+        "//src:windows": [
+            "blaze_util_mingw.cc",
         ],
         "//conditions:default": [
             "blaze_util_linux.cc",
@@ -23,9 +33,33 @@ cc_library(
         "blaze_util.h",
         "blaze_util_platform.h",
     ],
+    linkopts = select({
+        "//src:darwin": [
+        ],
+        "//src:darwin_x86_64": [
+        ],
+        "//src:freebsd": [
+        ],
+        "//conditions:default": [
+            "-lrt",
+        ],
+    }),
     visibility = ["//visibility:public"],
     deps = [
         "//src/main/cpp/util",
+        "//src/main/cpp/util:blaze_exit_code",
+    ],
+)
+
+cc_library(
+    name = "blaze_abrupt_exit",
+    srcs = [
+        "blaze_abrupt_exit.cc",
+    ],
+    hdrs = [
+        "blaze_abrupt_exit.h",
+    ],
+    deps = [
         "//src/main/cpp/util:blaze_exit_code",
     ],
 )
@@ -34,6 +68,7 @@ cc_binary(
     name = "client",
     srcs = [
         "blaze.cc",
+        "blaze_globals.h",
         "blaze_startup_options.cc",
         "blaze_startup_options.h",
         "blaze_startup_options_common.cc",
@@ -48,6 +83,8 @@ cc_binary(
     linkopts = select({
         "//src:darwin": [
         ],
+        "//src:darwin_x86_64": [
+        ],
         "//src:freebsd": [
             "-lprocstat",
         ],
@@ -57,6 +94,7 @@ cc_binary(
     }),
     visibility = ["//src:__pkg__"],
     deps = [
+        ":blaze_abrupt_exit",
         ":blaze_util",
         "//src/main/cpp/util",
         "//src/main/cpp/util:md5",

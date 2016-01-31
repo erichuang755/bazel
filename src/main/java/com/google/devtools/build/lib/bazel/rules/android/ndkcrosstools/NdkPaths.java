@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,9 +15,9 @@
 package com.google.devtools.build.lib.bazel.rules.android.ndkcrosstools;
 
 import com.google.common.collect.ImmutableList;
-import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.rules.cpp.CppConfiguration;
 import com.google.devtools.build.lib.rules.cpp.CppConfiguration.Tool;
+import com.google.devtools.build.lib.view.config.crosstool.CrosstoolConfig.CToolchain;
 import com.google.devtools.build.lib.view.config.crosstool.CrosstoolConfig.ToolPath;
 
 import java.util.Arrays;
@@ -40,10 +40,10 @@ public class NdkPaths {
   private final String repositoryName, hostPlatform;
   private final ApiLevel apiLevel;
 
-  NdkPaths(EventHandler eventHandler, String repositoryName, String hostPlatform, String apiLevel) {
+  public NdkPaths(String repositoryName, String hostPlatform, ApiLevel apiLevel) {
     this.repositoryName = repositoryName;
     this.hostPlatform = hostPlatform;
-    this.apiLevel = new ApiLevel(eventHandler, repositoryName, apiLevel);
+    this.apiLevel = apiLevel;
   }
 
   ImmutableList<ToolPath> createToolpaths(String toolchainName, String targetPlatform,
@@ -91,8 +91,7 @@ public class NdkPaths {
 
   private String createToolPath(String toolchainName, String toolName) {
 
-    String toolpathTemplate =
-        "external/%repositoryName%/ndk/toolchains/%toolchainName%/prebuilt/%hostPlatform%"
+    String toolpathTemplate = "ndk/toolchains/%toolchainName%/prebuilt/%hostPlatform%"
         + "/bin/%toolName%";
 
     return toolpathTemplate
@@ -103,7 +102,7 @@ public class NdkPaths {
   }
 
   public static String getToolchainDirectoryFromToolPath(String toolPath) {
-    return toolPath.split("/")[4];
+    return toolPath.split("/")[2];
   }
 
   String createGccToolchainPath(String toolchainName) {
@@ -117,7 +116,34 @@ public class NdkPaths {
         .replace("%hostPlatform%", hostPlatform);
   }
 
-  ImmutableList<String> createToolchainIncludePaths(
+  void addToolchainIncludePaths(
+      List<CToolchain.Builder> toolchains,
+      String toolchainName,
+      String targetPlatform,
+      String gccVersion) {
+
+    for (CToolchain.Builder toolchain : toolchains) {
+      addToolchainIncludePaths(toolchain, toolchainName, targetPlatform, gccVersion);
+    }
+  }
+
+  void addToolchainIncludePaths(
+      CToolchain.Builder toolchain,
+      String toolchainName,
+      String targetPlatform,
+      String gccVersion) {
+
+    List<String> includePaths =
+        this.createToolchainIncludePaths(toolchainName, targetPlatform, gccVersion);
+    
+    for (String includePath : includePaths) {
+      toolchain.addCxxBuiltinIncludeDirectory(includePath);
+      toolchain.addUnfilteredCxxFlag("-isystem");
+      toolchain.addUnfilteredCxxFlag(includePath);
+    }
+  }
+  
+  private ImmutableList<String> createToolchainIncludePaths(
       String toolchainName, String targetPlatform, String gccVersion) {
 
     ImmutableList.Builder<String> includePaths = ImmutableList.builder();
@@ -161,9 +187,7 @@ public class NdkPaths {
 
   ImmutableList<String> createGnuLibstdcIncludePaths(String gccVersion, String targetCpu) {
 
-    if (targetCpu.equals("arm64")) {
-      targetCpu = "arm64-v8a";
-    }
+    String cpuNoThumb = targetCpu.replaceAll("-thumb$", "");
 
     String prefix = "external/%repositoryName%/ndk/sources/cxx-stl/gnu-libstdc++/%gccVersion%/";
     List<String> includePathTemplates = Arrays.asList(
@@ -177,7 +201,7 @@ public class NdkPaths {
           template
             .replace("%repositoryName%", repositoryName)
             .replace("%gccVersion%", gccVersion)
-            .replace("%targetCpu%", targetCpu));
+            .replace("%targetCpu%", cpuNoThumb));
     }
     return includePaths.build();
   }
@@ -200,5 +224,29 @@ public class NdkPaths {
         prefix + "cxx-stl/llvm-libc++/libcxx/include",
         prefix + "cxx-stl/llvm-libc++abi/libcxxabi/include",
         prefix + "android/support/include");
+  }
+
+  /**
+   * @param stl The STL name as it appears in the NDK path
+   * @param gccVersion The GCC version "4.8" or "4.9", applicable only to gnu-libstdc++, or null
+   * @param targetCpu Target CPU
+   * @param fileExtension "a" or "so"
+   * @return A glob pattern for the STL runtime libs in the NDK.
+   */
+  static String createStlRuntimeLibsGlob(
+      String stl, String gccVersion, String targetCpu, String fileExtension) {
+    
+    if (gccVersion != null) {
+      stl += "/" + gccVersion;
+    }
+
+    targetCpu = targetCpu.replaceAll("-thumb$", "/thumb");
+
+    String template =
+        "ndk/sources/cxx-stl/%stl%/libs/%targetCpu%/*.%fileExtension%";
+    return template
+        .replace("%stl%", stl)
+        .replace("%targetCpu%", targetCpu)
+        .replace("%fileExtension%", fileExtension);
   }
 }

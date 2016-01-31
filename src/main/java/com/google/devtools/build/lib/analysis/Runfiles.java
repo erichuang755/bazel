@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,7 +16,6 @@ package com.google.devtools.build.lib.analysis;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Function;
-import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.Artifact;
@@ -28,9 +27,10 @@ import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.events.Location;
-import com.google.devtools.build.lib.packages.Type;
-import com.google.devtools.build.lib.syntax.SkylarkCallable;
-import com.google.devtools.build.lib.syntax.SkylarkModule;
+import com.google.devtools.build.lib.packages.BuildType;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 
@@ -361,17 +361,17 @@ public final class Runfiles {
       for (Artifact artifact : pruningManifest.getCandidateRunfiles()) {
         allowedRunfiles.put(artifact.getRootRelativePath().getPathString(), artifact);
       }
-      BufferedReader reader = new BufferedReader(
-          new InputStreamReader(pruningManifest.getManifestFile().getPath().getInputStream()));
-      String line;
-      while ((line = reader.readLine()) != null) {
-        Artifact artifact = allowedRunfiles.get(line);
-        if (artifact != null) {
-          manifest.put(artifact.getRootRelativePath(), artifact);
+      try (BufferedReader reader = new BufferedReader(
+          new InputStreamReader(pruningManifest.getManifestFile().getPath().getInputStream()))) {
+        String line;
+        while ((line = reader.readLine()) != null) {
+          Artifact artifact = allowedRunfiles.get(line);
+          if (artifact != null) {
+            manifest.put(artifact.getRootRelativePath(), artifact);
+          }
         }
       }
     }
-
     manifest = filterListForObscuringSymlinks(eventHandler, location, manifest);
 
     // TODO(bazel-team): Create /dev/null-like Artifact to avoid nulls?
@@ -508,8 +508,12 @@ public final class Runfiles {
       this.suffix = "";
     }
 
-    public Builder(String suffix) {
-      this.suffix = suffix;
+    /**
+     * Creates a builder with the given suffix.
+     * @param workspace is the string specified in workspace() in the WORKSPACE file.
+     */
+    public Builder(String workspace) {
+      this.suffix = workspace;
     }
 
     /**
@@ -809,7 +813,7 @@ public final class Runfiles {
      */
     private static Iterable<? extends TransitiveInfoCollection> getPrerequisites(
         RuleContext ruleContext, String attributeName, Mode mode) {
-      if (ruleContext.getRule().isAttrDefined(attributeName, Type.LABEL_LIST)) {
+      if (ruleContext.getRule().isAttrDefined(attributeName, BuildType.LABEL_LIST)) {
         return ruleContext.getPrerequisites(attributeName, mode);
       } else {
         return Collections.emptyList();

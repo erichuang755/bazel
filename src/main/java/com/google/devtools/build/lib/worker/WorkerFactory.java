@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -72,19 +72,12 @@ final class WorkerFactory extends BaseKeyedPooledObjectFactory<WorkerKey, Worker
   }
 
   /**
-   * The worker is considered to be valid when its process is still alive.
+   * The worker is considered to be valid when its files have not changed on disk and its process is
+   * still alive.
    */
   @Override
   public boolean validateObject(WorkerKey key, PooledObject<Worker> p) {
-    if (verbose) {
-      reporter.handle(
-          Event.info(
-              "Validating "
-                  + key.getMnemonic()
-                  + " worker (id "
-                  + p.getObject().getWorkerId()
-                  + ")."));
-    }
-    return p.getObject().isAlive();
+    Worker worker = p.getObject();
+    return key.getWorkerFilesHash().equals(worker.getWorkerFilesHash()) && worker.isAlive();
   }
 }

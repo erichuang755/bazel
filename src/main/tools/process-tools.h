@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -30,11 +30,11 @@
     exit(EXIT_FAILURE);                                \
   }
 
-#define CHECK_CALL(x, ...)                                    \
-  if ((x) == -1) {                                            \
-    fprintf(stderr, __FILE__ ":" S__LINE__ ": " __VA_ARGS__); \
-    perror(#x);                                               \
-    exit(EXIT_FAILURE);                                       \
+#define CHECK_CALL(x)                             \
+  if ((x) == -1) {                                \
+    fprintf(stderr, __FILE__ ":" S__LINE__ ": "); \
+    perror(#x);                                   \
+    exit(EXIT_FAILURE);                           \
   }
 
 #define CHECK_NOT_NULL(x) \

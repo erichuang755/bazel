@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Copyright 2015 Google Inc. All rights reserved.
+# Copyright 2015 The Bazel Authors. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -63,6 +63,10 @@ function test_extra_action() {
   # a program that parses the proto here.
   cat > mypkg/echoer.sh <<EOF
 #!/bin/bash
+if [[ ! -e \$0.runfiles/mypkg/runfile ]]; then
+  echo "Runfile not found" >&2
+  exit 1
+fi
 echo EXTRA ACTION FILE: \$1
 EOF
   chmod +x mypkg/echoer.sh
@@ -74,6 +78,8 @@ public class Hello {
     }
 }
 EOF
+
+  touch mypkg/runfile
 
   cat > mypkg/BUILD <<EOF
 package(default_visibility = ["//visibility:public"])
@@ -93,6 +99,7 @@ action_listener(
 sh_binary(
     name = "echoer",
     srcs = ["echoer.sh"],
+    data = ["runfile"],
 )
 
 java_library(
@@ -234,6 +241,37 @@ EOF
     bazel-genfiles/pkg/test.out
   assert_contains "TMPDIR=/some/path" \
     bazel-genfiles/pkg/test.out
+}
+
+function test_genrule_remote() {
+  cat > WORKSPACE <<EOF
+local_repository(
+    name = "r",
+    path = __workspace_dir__,
+)
+EOF
+  mkdir package
+  cat > package/BUILD <<EOF
+genrule(
+    name = "abs_dep",
+    srcs = ["//package:in"],
+    outs = ["abs_dep.out"],
+    cmd = "echo '\$(locations //package:in)' > \$@",
+)
+
+sh_binary(
+    name = "in",
+    srcs = ["in.sh"],
+)
+EOF
+
+  cat > package/in.sh << EOF
+#!/bin/bash
+echo "Hi"
+EOF
+  chmod +x package/in.sh
+
+  bazel build @r//package:abs_dep >$TEST_log 2>&1 || fail "Should build"
 }
 
 run_suite "rules test"

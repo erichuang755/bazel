@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,8 +16,10 @@ package com.google.devtools.build.lib.skyframe;
 import static com.google.devtools.build.lib.skyframe.SkyFunctions.DIRECTORY_LISTING_STATE;
 import static com.google.devtools.build.lib.skyframe.SkyFunctions.FILE_STATE;
 
-import com.google.common.base.Optional;
+import com.google.common.base.Objects;
 import com.google.common.collect.ImmutableList;
+import com.google.devtools.build.lib.pkgcache.PathPackageLocator;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.util.io.TimestampGranularityMonitor;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.RootedPath;
@@ -30,48 +32,44 @@ import java.util.Set;
 import javax.annotation.Nullable;
 
 /** Utilities for checking dirtiness of keys (mainly filesystem keys) in the graph. */
-class DirtinessCheckerUtils {
+public class DirtinessCheckerUtils {
   private DirtinessCheckerUtils() {}
 
   static class FileDirtinessChecker extends SkyValueDirtinessChecker {
-    private boolean applies(SkyKey skyKey) {
+    @Override
+    public boolean applies(SkyKey skyKey) {
       return skyKey.functionName().equals(FILE_STATE);
     }
 
     @Override
     @Nullable
-    public Optional<SkyValue> maybeCreateNewValue(SkyKey key, TimestampGranularityMonitor tsgm) {
-      if (!applies(key)) {
-        return null;
-      }
+    public SkyValue createNewValue(SkyKey key, @Nullable TimestampGranularityMonitor tsgm) {
       RootedPath rootedPath = (RootedPath) key.argument();
       try {
-        return Optional.<SkyValue>of(FileStateValue.create(rootedPath, tsgm));
+        return FileStateValue.create(rootedPath, tsgm);
       } catch (InconsistentFilesystemException | IOException e) {
         // TODO(bazel-team): An IOException indicates a failure to get a file digest or a symlink
         // target, not a missing file. Such a failure really shouldn't happen, so failing early
         // may be better here.
-        return Optional.<SkyValue>absent();
+        return null;
       }
     }
   }
 
   static class DirectoryDirtinessChecker extends SkyValueDirtinessChecker {
-    private boolean applies(SkyKey skyKey) {
+    @Override
+    public boolean applies(SkyKey skyKey) {
       return skyKey.functionName().equals(DIRECTORY_LISTING_STATE);
     }
 
     @Override
     @Nullable
-    public Optional<SkyValue> maybeCreateNewValue(SkyKey key, TimestampGranularityMonitor tsgm) {
-      if (!applies(key)) {
-        return null;
-      }
+    public SkyValue createNewValue(SkyKey key, @Nullable TimestampGranularityMonitor tsgm) {
       RootedPath rootedPath = (RootedPath) key.argument();
       try {
-        return Optional.<SkyValue>of(DirectoryListingStateValue.create(rootedPath));
+        return DirectoryListingStateValue.create(rootedPath);
       } catch (IOException e) {
-        return Optional.<SkyValue>absent();
+        return null;
       }
     }
   }
@@ -82,31 +80,66 @@ class DirtinessCheckerUtils {
     private final UnionDirtinessChecker checker =
         new UnionDirtinessChecker(ImmutableList.of(fdc, ddc));
 
-    protected boolean applies(SkyKey skyKey) {
+    @Override
+    public boolean applies(SkyKey skyKey) {
       return fdc.applies(skyKey) || ddc.applies(skyKey);
     }
 
     @Override
     @Nullable
-    public Optional<SkyValue> maybeCreateNewValue(SkyKey key, TimestampGranularityMonitor tsgm) {
-      return checker.maybeCreateNewValue(key, tsgm);
+    public SkyValue createNewValue(SkyKey key, @Nullable TimestampGranularityMonitor tsgm) {
+      return checker.createNewValue(key, tsgm);
     }
   }
 
   static final class MissingDiffDirtinessChecker extends BasicFilesystemDirtinessChecker {
-    private final Set<Path> missingDiffPaths;
+    private final Set<Path> missingDiffPackageRoots;
 
-    MissingDiffDirtinessChecker(final Set<Path> missingDiffPaths) {
-      this.missingDiffPaths = missingDiffPaths;
+    MissingDiffDirtinessChecker(final Set<Path> missingDiffPackageRoots) {
+      this.missingDiffPackageRoots = missingDiffPackageRoots;
     }
 
     @Override
+    public boolean applies(SkyKey key) {
+      return super.applies(key)
+          && missingDiffPackageRoots.contains(((RootedPath) key.argument()).getRoot());
+    }
+  }
+
+  /** Checks files outside of the package roots for changes. */
+  static final class ExternalDirtinessChecker extends BasicFilesystemDirtinessChecker {
+    private final PathPackageLocator packageLocator;
+
+    ExternalDirtinessChecker(PathPackageLocator packageLocator) {
+      this.packageLocator = packageLocator;
+    }
+
+    @Override
+    public boolean applies(SkyKey key) {
+      return super.applies(key)
+          && !ExternalFilesHelper.isInternal((RootedPath) key.argument(), packageLocator);
+    }
+
+    /**
+     * Files under output_base/external have a dependency on the WORKSPACE file, so we don't add a
+     * new SkyValue to the graph yet because it might change once the WORKSPACE file has been
+     * parsed.
+     *
+     * <p>This dirtiness checker is a bit conservative: files that are outside the package roots
+     * but aren't under output_base/external/ could just be stat-ed here (but they aren't).</p>
+     */
     @Nullable
-    public DirtyResult maybeCheck(SkyKey key, @Nullable SkyValue oldValue,
-        TimestampGranularityMonitor tsgm) {
-      return applies(key) && missingDiffPaths.contains(((RootedPath) key.argument()).getRoot())
-        ? super.maybeCheck(key, oldValue, tsgm)
-        : null;
+    @Override
+    public SkyValue createNewValue(SkyKey key, @Nullable TimestampGranularityMonitor tsgm) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public SkyValueDirtinessChecker.DirtyResult check(
+        SkyKey skyKey, SkyValue oldValue, @Nullable TimestampGranularityMonitor tsgm) {
+      return Objects.equal(super.createNewValue(skyKey, tsgm), oldValue)
+          ? SkyValueDirtinessChecker.DirtyResult.notDirty(oldValue)
+          : SkyValueDirtinessChecker.DirtyResult.dirty(oldValue);
     }
   }
 
@@ -118,29 +151,31 @@ class DirtinessCheckerUtils {
       this.dirtinessCheckers = dirtinessCheckers;
     }
 
-    @Override
     @Nullable
-    public Optional<SkyValue> maybeCreateNewValue(SkyKey key, TimestampGranularityMonitor tsgm) {
+    private SkyValueDirtinessChecker getChecker(SkyKey key) {
       for (SkyValueDirtinessChecker dirtinessChecker : dirtinessCheckers) {
-        Optional<SkyValue> newValueMaybe = dirtinessChecker.maybeCreateNewValue(key, tsgm);
-        if (newValueMaybe != null) {
-          return newValueMaybe;
+        if (dirtinessChecker.applies(key)) {
+          return dirtinessChecker;
         }
       }
       return null;
     }
 
     @Override
+    public boolean applies(SkyKey key) {
+      return getChecker(key) != null;
+    }
+
+    @Override
     @Nullable
-    public DirtyResult maybeCheck(SkyKey key, @Nullable SkyValue oldValue,
-        TimestampGranularityMonitor tsgm) {
-      for (SkyValueDirtinessChecker dirtinessChecker : dirtinessCheckers) {
-        DirtyResult dirtyResult = dirtinessChecker.maybeCheck(key, oldValue, tsgm);
-        if (dirtyResult != null) {
-          return dirtyResult;
-        }
-      }
-      return null;
+    public SkyValue createNewValue(SkyKey key, @Nullable TimestampGranularityMonitor tsgm) {
+      return Preconditions.checkNotNull(getChecker(key), key).createNewValue(key, tsgm);
+    }
+
+    @Override
+    public DirtyResult check(SkyKey key, @Nullable SkyValue oldValue,
+        @Nullable TimestampGranularityMonitor tsgm) {
+      return Preconditions.checkNotNull(getChecker(key), key).check(key, oldValue, tsgm);
     }
   }
 }

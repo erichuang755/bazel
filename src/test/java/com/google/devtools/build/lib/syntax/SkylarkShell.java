@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -81,6 +81,11 @@ class SkylarkShell {
   }
 
   public static void main(String[] args) {
+    if (args.length > 0 && args[0].equals("--compiler-debug")) {
+      UserDefinedFunction.enableCompiler = true;
+      UserDefinedFunction.debugCompiler = true;
+      UserDefinedFunction.debugCompilerPrintByteCode = true;
+    }
     new SkylarkShell().readEvalPrintLoop();
   }
 }

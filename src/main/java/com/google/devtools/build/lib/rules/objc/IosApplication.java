@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,6 +21,8 @@ import com.google.devtools.build.lib.analysis.RuleConfiguredTargetBuilder;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.packages.Attribute.SplitTransition;
+import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
+import com.google.devtools.build.lib.rules.apple.Platform;
 import com.google.devtools.build.lib.rules.objc.ReleaseBundlingSupport.SplitArchTransition;
 import com.google.devtools.build.lib.rules.objc.ReleaseBundlingSupport.SplitArchTransition.ConfigurationDistinguisher;
 
@@ -51,8 +53,8 @@ public class IosApplication extends ReleaseBundlingTargetFactory {
   protected void configureTarget(RuleConfiguredTargetBuilder target, RuleContext ruleContext,
       ReleaseBundlingSupport releaseBundlingSupport) throws InterruptedException {
     // If this is an application built for the simulator, make it runnable.
-    ObjcConfiguration objcConfiguration = ObjcRuleClasses.objcConfiguration(ruleContext);
-    if (objcConfiguration.getBundlingPlatform() == Platform.SIMULATOR) {
+    AppleConfiguration appleConfiguration = ruleContext.getFragment(AppleConfiguration.class);
+    if (appleConfiguration.getBundlingPlatform() == Platform.IOS_SIMULATOR) {
       Artifact runnerScript = ObjcRuleClasses.intermediateArtifacts(ruleContext).runnerScript();
       Artifact ipaFile = ruleContext.getImplicitOutputArtifact(ReleaseBundlingSupport.IPA);
       releaseBundlingSupport.registerGenerateRunnerScriptAction(runnerScript, ipaFile);

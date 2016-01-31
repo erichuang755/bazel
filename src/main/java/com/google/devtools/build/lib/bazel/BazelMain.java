@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -48,8 +48,7 @@ public final class BazelMain {
           com.google.devtools.build.lib.worker.WorkerModule.class,
           com.google.devtools.build.lib.standalone.StandaloneModule.class,
           com.google.devtools.build.lib.sandbox.SandboxModule.class,
-          com.google.devtools.build.lib.runtime.BuildSummaryStatsModule.class,
-          com.google.devtools.build.lib.webstatusserver.WebStatusServerModule.class);
+          com.google.devtools.build.lib.runtime.BuildSummaryStatsModule.class);
 
   public static void main(String[] args) {
     BlazeVersionInfo.setBuildInfo(tryGetBuildInfo());

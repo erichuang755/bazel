@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -26,6 +26,8 @@ import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -43,7 +45,8 @@ public final class Converters {
       try {
         return UnvalidatedAndroidData.valueOf(input);
       } catch (IllegalArgumentException e) {
-        throw new OptionsParsingException("invalid UnvalidatedAndroidData specification", e);
+        throw new OptionsParsingException(
+            String.format("invalid UnvalidatedAndroidData: %s", e.getMessage()), e);
       }
     }
 
@@ -73,7 +76,8 @@ public final class Converters {
         }
         return builder.build();
       } catch (IllegalArgumentException e) {
-        throw new OptionsParsingException("invalid DependencyAndroidData", e);
+        throw new OptionsParsingException(
+            String.format("invalid DependencyAndroidData: %s", e.getMessage()), e);
       }
     }
 
@@ -124,11 +128,13 @@ public final class Converters {
       try {
         Path path = FileSystems.getDefault().getPath(input);
         if (mustExist && !Files.exists(path)) {
-          throw new OptionsParsingException(String.format("%s is not a valid path.", input));
+          throw new OptionsParsingException(
+              String.format("%s is not a valid path: it does not exist.", input));
         }
         return path;
       } catch (InvalidPathException e) {
-        throw new OptionsParsingException(String.format("%s is not a valid path.", input), e);
+        throw new OptionsParsingException(
+            String.format("%s is not a valid path: %s.", input, e.getMessage()), e);
       }
     }
 
@@ -154,4 +160,30 @@ public final class Converters {
       super(VariantConfiguration.Type.class, "variant configuration type");
     }
   }
+
+  /**
+   * Validating converter for a list of Paths.
+   * A Path is considered valid if it resolves to a file.
+   */
+  public static class PathListConverter implements Converter<List<Path>> {
+
+    final PathConverter baseConverter = new PathConverter();
+
+    @Override
+    public List<Path> convert(String input) throws OptionsParsingException {
+      List<Path> list = new ArrayList<>();
+      for (String piece : input.split(":")) {
+        if (!piece.isEmpty()) {
+          list.add(baseConverter.convert(piece));
+        }
+      }
+      return Collections.unmodifiableList(list);
+    }
+
+    @Override
+    public String getTypeDescription() {
+      return "a colon-separated list of paths";
+    }
+  }
+
 }

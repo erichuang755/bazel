@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,18 +15,23 @@
 package com.google.devtools.build.lib.cmdline;
 
 import static com.google.common.truth.Truth.assertThat;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotSame;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.fail;
 
 import com.google.devtools.build.lib.cmdline.LabelValidator.PackageAndTarget;
 
-import junit.framework.TestCase;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.JUnit4;
 
 /**
  * Tests for {@link LabelValidator}.
  */
-public class LabelValidatorTest extends TestCase {
-
-  private static final String BAD_PACKAGE_CHARS =
-      "package names may contain only A-Z, a-z, 0-9, '/', '-' and '_'";
+@RunWith(JUnit4.class)
+public class LabelValidatorTest {
 
   private PackageAndTarget newFooTarget() {
     return new PackageAndTarget("foo", "foo");
@@ -36,6 +41,7 @@ public class LabelValidatorTest extends TestCase {
     return new PackageAndTarget("bar", "bar");
   }
 
+  @Test
   public void testValidatePackageName() throws Exception {
     // OK:
     assertNull(LabelValidator.validatePackageName("foo"));
@@ -45,24 +51,41 @@ public class LabelValidatorTest extends TestCase {
     assertNull(LabelValidator.validatePackageName("foo-bar"));
     assertNull(LabelValidator.validatePackageName("Foo-Bar"));
     assertNull(LabelValidator.validatePackageName("FOO-BAR"));
+    assertNull(LabelValidator.validatePackageName("bar.baz"));
+    assertNull(LabelValidator.validatePackageName("a/..b"));
+    assertNull(LabelValidator.validatePackageName("a/.b"));
+    assertNull(LabelValidator.validatePackageName("a/b."));
+    assertNull(LabelValidator.validatePackageName("a/b.."));
 
     // Bad:
-    assertEquals("package names may not start with '/'",
-        LabelValidator.validatePackageName("/foo"));
-    assertEquals("package names may not end with '/'",
-                 LabelValidator.validatePackageName("foo/"));
-    assertEquals(BAD_PACKAGE_CHARS,
-                 LabelValidator.validatePackageName("bar baz"));
-    assertEquals(BAD_PACKAGE_CHARS,
-                 LabelValidator.validatePackageName("foo:bar"));
-    assertEquals(BAD_PACKAGE_CHARS,
-                 LabelValidator.validatePackageName("baz@12345"));
-    assertEquals(BAD_PACKAGE_CHARS,
-                 LabelValidator.validatePackageName("baz(foo)"));
-    assertEquals(BAD_PACKAGE_CHARS,
-                 LabelValidator.validatePackageName("bazfoo)"));
+    assertEquals(
+        "package names may not start with '/'", LabelValidator.validatePackageName("/foo"));
+    assertEquals("package names may not end with '/'", LabelValidator.validatePackageName("foo/"));
+    assertEquals(LabelValidator.PACKAGE_NAME_ERROR, LabelValidator.validatePackageName("bar baz"));
+    assertEquals(LabelValidator.PACKAGE_NAME_ERROR, LabelValidator.validatePackageName("foo:bar"));
+    assertEquals(
+        LabelValidator.PACKAGE_NAME_ERROR, LabelValidator.validatePackageName("baz@12345"));
+    assertEquals(LabelValidator.PACKAGE_NAME_ERROR, LabelValidator.validatePackageName("baz(foo)"));
+    assertEquals(LabelValidator.PACKAGE_NAME_ERROR, LabelValidator.validatePackageName("bazfoo)"));
+
+    assertEquals(
+        LabelValidator.PACKAGE_NAME_DOT_ERROR, LabelValidator.validatePackageName("bar/../baz"));
+    assertEquals(
+        LabelValidator.PACKAGE_NAME_DOT_ERROR, LabelValidator.validatePackageName("bar/.."));
+    assertEquals(
+        LabelValidator.PACKAGE_NAME_DOT_ERROR, LabelValidator.validatePackageName("../bar"));
+    assertEquals(
+        LabelValidator.PACKAGE_NAME_DOT_ERROR, LabelValidator.validatePackageName("bar/..."));
+
+    assertEquals(
+        LabelValidator.PACKAGE_NAME_DOT_ERROR, LabelValidator.validatePackageName("bar/./baz"));
+    assertEquals(
+        LabelValidator.PACKAGE_NAME_DOT_ERROR, LabelValidator.validatePackageName("bar/."));
+    assertEquals(
+        LabelValidator.PACKAGE_NAME_DOT_ERROR, LabelValidator.validatePackageName("./bar"));
   }
 
+  @Test
   public void testValidateTargetName() throws Exception {
 
     assertNull(LabelValidator.validateTargetName("foo"));
@@ -92,12 +115,15 @@ public class LabelValidatorTest extends TestCase {
                  LabelValidator.validateTargetName("bazfoo)"));
   }
 
+  @Test
   public void testValidateAbsoluteLabel() throws Exception {
     PackageAndTarget emptyPackage = new PackageAndTarget("", "bar");
     assertEquals(emptyPackage, LabelValidator.validateAbsoluteLabel("//:bar"));
     assertEquals(emptyPackage, LabelValidator.validateAbsoluteLabel("@repo//:bar"));
     assertEquals(new PackageAndTarget("foo", "bar"),
         LabelValidator.validateAbsoluteLabel("@repo//foo:bar"));
+    assertEquals(new PackageAndTarget("foo", "bar"),
+        LabelValidator.validateAbsoluteLabel("@//foo:bar"));
 
     try {
       LabelValidator.validateAbsoluteLabel("@foo");
@@ -107,6 +133,7 @@ public class LabelValidatorTest extends TestCase {
     }
   }
 
+  @Test
   public void testPackageAndTargetHashCode_distinctButEqualObjects() {
     PackageAndTarget fooTarget1 = newFooTarget();
     PackageAndTarget fooTarget2 = newFooTarget();
@@ -114,6 +141,7 @@ public class LabelValidatorTest extends TestCase {
     assertEquals("Should have same hash code", fooTarget2.hashCode(), fooTarget1.hashCode());
   }
 
+  @Test
   public void testPackageAndTargetEquals_distinctButEqualObjects() {
     PackageAndTarget fooTarget1 = newFooTarget();
     PackageAndTarget fooTarget2 = newFooTarget();
@@ -121,10 +149,12 @@ public class LabelValidatorTest extends TestCase {
     assertEquals("Should be equal", fooTarget2, fooTarget1);
   }
 
+  @Test
   public void testPackageAndTargetEquals_unequalObjects() {
     assertFalse("should be unequal", newFooTarget().equals(newBarTarget()));
   }
 
+  @Test
   public void testPackageAndTargetToString() {
     assertEquals("//foo:foo", newFooTarget().toString());
     assertEquals("//bar:bar", newBarTarget().toString());

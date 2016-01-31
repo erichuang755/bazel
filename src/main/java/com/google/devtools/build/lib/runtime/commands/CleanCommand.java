@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,6 @@
 package com.google.devtools.build.lib.runtime.commands;
 
 import com.google.devtools.build.lib.actions.ExecException;
-import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.buildtool.BuildRequest;
 import com.google.devtools.build.lib.buildtool.OutputDirectoryLinksUtils;
 import com.google.devtools.build.lib.events.Event;
@@ -22,6 +21,7 @@ import com.google.devtools.build.lib.runtime.BlazeCommand;
 import com.google.devtools.build.lib.runtime.BlazeCommandDispatcher.ShutdownBlazeServerException;
 import com.google.devtools.build.lib.runtime.BlazeRuntime;
 import com.google.devtools.build.lib.runtime.Command;
+import com.google.devtools.build.lib.runtime.CommandEnvironment;
 import com.google.devtools.build.lib.shell.CommandException;
 import com.google.devtools.build.lib.util.CommandBuilder;
 import com.google.devtools.build.lib.util.ExitCode;
@@ -83,15 +83,16 @@ public final class CleanCommand implements BlazeCommand {
   private static Logger LOG = Logger.getLogger(CleanCommand.class.getName());
 
   @Override
-  public ExitCode exec(BlazeRuntime runtime, OptionsProvider options)
+  public ExitCode exec(CommandEnvironment env, OptionsProvider options)
       throws ShutdownBlazeServerException {
+    BlazeRuntime runtime = env.getRuntime();
     Options cleanOptions = options.getOptions(Options.class);
     cleanOptions.expunge_async = cleanOptions.cleanStyle.equals("expunge_async");
     cleanOptions.expunge = cleanOptions.cleanStyle.equals("expunge");
 
     if (!cleanOptions.expunge && !cleanOptions.expunge_async
         && !cleanOptions.cleanStyle.isEmpty()) {
-      runtime.getReporter().handle(Event.error(
+      env.getReporter().handle(Event.error(
           null, "Invalid clean_style value '" + cleanOptions.cleanStyle + "'"));
       return ExitCode.COMMAND_LINE_ERROR;
     }
@@ -101,29 +102,30 @@ public final class CleanCommand implements BlazeCommand {
         "Starting clean (this may take a while). " +
             "Consider using --expunge_async if the clean takes more than several minutes.";
 
-    runtime.getReporter().handle(Event.info(null/*location*/, cleanBanner));
+    env.getReporter().handle(Event.info(null/*location*/, cleanBanner));
     try {
       String symlinkPrefix =
-          options.getOptions(BuildRequest.BuildRequestOptions.class).symlinkPrefix;
-      actuallyClean(runtime, runtime.getOutputBase(), cleanOptions, symlinkPrefix);
+          options.getOptions(BuildRequest.BuildRequestOptions.class).getSymlinkPrefix();
+      actuallyClean(env, runtime.getOutputBase(), cleanOptions, symlinkPrefix);
       return ExitCode.SUCCESS;
     } catch (IOException e) {
-      runtime.getReporter().handle(Event.error(e.getMessage()));
+      env.getReporter().handle(Event.error(e.getMessage()));
       return ExitCode.LOCAL_ENVIRONMENTAL_ERROR;
     } catch (CommandException | ExecException e) {
-      runtime.getReporter().handle(Event.error(e.getMessage()));
+      env.getReporter().handle(Event.error(e.getMessage()));
       return ExitCode.RUN_FAILURE;
     } catch (InterruptedException e) {
-      runtime.getReporter().handle(Event.error("clean interrupted"));
+      env.getReporter().handle(Event.error("clean interrupted"));
       return ExitCode.INTERRUPTED;
     }
   }
 
-  private void actuallyClean(BlazeRuntime runtime,
+  private void actuallyClean(CommandEnvironment env,
       Path outputBase, Options cleanOptions, String symlinkPrefix) throws IOException,
       ShutdownBlazeServerException, CommandException, ExecException, InterruptedException {
-    if (runtime.getOutputService() != null) {
-      runtime.getOutputService().clean();
+    BlazeRuntime runtime = env.getRuntime();
+    if (env.getOutputService() != null) {
+      env.getOutputService().clean();
     }
     if (cleanOptions.expunge) {
       LOG.info("Expunging...");
@@ -142,7 +144,7 @@ public final class CleanCommand implements BlazeCommand {
       // same file system, and therefore the mv will be atomic and fast.
       Path tempOutputBase = outputBase.getParentDirectory().getChild(tempBaseName);
       outputBase.renameTo(tempOutputBase);
-      runtime.getReporter().handle(Event.info(
+      env.getReporter().handle(Event.info(
           null, "Output base moved to " + tempOutputBase + " for deletion"));
 
       // Daemonize the shell and use the double-fork idiom to ensure that the shell
@@ -159,9 +161,11 @@ public final class CleanCommand implements BlazeCommand {
     } else {
       LOG.info("Output cleaning...");
       runtime.clearCaches();
+      // In order to be sure that we delete everything, delete the workspace directory both for
+      // --deep_execroot and for --nodeep_execroot.
       for (String directory : new String[] {
-          BlazeDirectories.RELATIVE_OUTPUT_PATH, runtime.getWorkspaceName() }) {
-        Path child = outputBase.getChild(directory);
+          runtime.getWorkspaceName(), "execroot/" + runtime.getWorkspaceName() }) {
+        Path child = outputBase.getRelative(directory);
         if (child.exists()) {
           LOG.finest("Cleaning " + child);
           FileSystemUtils.deleteTreesBelow(child);
@@ -170,7 +174,7 @@ public final class CleanCommand implements BlazeCommand {
     }
     // remove convenience links
     OutputDirectoryLinksUtils.removeOutputDirectoryLinks(
-        runtime.getWorkspaceName(), runtime.getWorkspace(), runtime.getReporter(), symlinkPrefix);
+        runtime.getWorkspaceName(), runtime.getWorkspace(), env.getReporter(), symlinkPrefix);
     // shutdown on expunge cleans
     if (cleanOptions.expunge || cleanOptions.expunge_async) {
       throw new ShutdownBlazeServerException(0);
@@ -178,5 +182,5 @@ public final class CleanCommand implements BlazeCommand {
   }
 
   @Override
-  public void editOptions(BlazeRuntime runtime, OptionsParser optionsParser) {}
+  public void editOptions(CommandEnvironment env, OptionsParser optionsParser) {}
 }

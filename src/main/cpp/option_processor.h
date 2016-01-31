@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -88,6 +88,7 @@ class OptionProcessor {
    public:
     RcFile(const string& filename, int index);
     blaze_exit_code::ExitCode Parse(
+        const string& workspace,
         std::vector<RcFile*>* rcfiles,
         std::map<string, std::vector<RcOption> >* rcoptions,
         string* error);
@@ -95,7 +96,8 @@ class OptionProcessor {
     const int Index() const { return index_; }
 
    private:
-    static blaze_exit_code::ExitCode Parse(const string& filename,
+    static blaze_exit_code::ExitCode Parse(const string& workspace,
+                                           const string& filename,
                                            const int index,
                                            std::vector<RcFile*>* rcfiles,
                                            std::map<string,

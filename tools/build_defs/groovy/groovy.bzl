@@ -1,4 +1,4 @@
-# Copyright 2015 Erik Kuefler. All rights reserved.
+# Copyright 2015 The Bazel Authors. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,7 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 
 def _groovy_jar_impl(ctx):
   """Creates a .jar file from Groovy sources. Users should rely on
@@ -30,7 +29,7 @@ def _groovy_jar_impl(ctx):
   # Set up the output directory and set JAVA_HOME
   cmd = "rm -rf %s\n" % build_output
   cmd += "mkdir -p %s\n" % build_output
-  cmd += "export JAVA_HOME=external/local-jdk\n"
+  cmd += "export JAVA_HOME=external/local_jdk\n"
 
   # Set GROOVY_HOME by scanning through the groovy SDK to find the license file,
   # which should be at the root of the SDK.
@@ -76,26 +75,31 @@ def _groovy_jar_impl(ctx):
   )
 
 _groovy_jar = rule(
-    implementation = _groovy_jar_impl,
     attrs = {
         "srcs": attr.label_list(
-            mandatory=False,
-            allow_files=FileType([".groovy"])),
+            non_empty = True,
+            allow_files = FileType([".groovy"]),
+        ),
         "deps": attr.label_list(
-            mandatory=False,
-            allow_files=FileType([".jar"])),
+            mandatory = False,
+            allow_files = FileType([".jar"]),
+        ),
         "_groovysdk": attr.label(
-            default=Label("//external:groovy-sdk")),
+            default = Label("//external:groovy-sdk"),
+        ),
         "_jdk": attr.label(
-            default=Label("//tools/defaults:jdk")),
+            default = Label("//tools/defaults:jdk"),
+        ),
         "_zipper": attr.label(
-            default=Label("//third_party/ijar:zipper"),
-            executable=True,
-            single_file=True),
+            default = Label("//third_party/ijar:zipper"),
+            executable = True,
+            single_file = True,
+        ),
     },
     outputs = {
         "class_jar": "lib%{name}.jar",
     },
+    implementation = _groovy_jar_impl,
 )
 
 def groovy_library(name, srcs=[], deps=[], **kwargs):
@@ -111,9 +115,9 @@ def groovy_library(name, srcs=[], deps=[], **kwargs):
   native.java_import(
       name = name,
       jars = [name + "-impl"],
+      deps = deps,
       **kwargs
   )
-
 
 def groovy_and_java_library(name, srcs=[], deps=[], **kwargs):
   """Accepts .groovy and .java srcs to create a groovy_library and a
@@ -148,6 +152,7 @@ def groovy_and_java_library(name, srcs=[], deps=[], **kwargs):
   native.java_import(
       name = name,
       jars = jars,
+      deps = deps,
       **kwargs
   )
 
@@ -155,7 +160,7 @@ def groovy_binary(name, main_class, srcs=[], deps=[], **kwargs):
   """Rule analagous to java_binary that accepts .groovy sources instead of .java
   sources.
   """
-  all_deps = deps
+  all_deps = deps + ["//external:groovy"]
   if srcs:
     groovy_library(
         name = name + "-lib",
@@ -179,7 +184,7 @@ def path_to_class(path):
   else:
     fail("groovy_test sources must be under src/test/java or src/test/groovy")
 
-def groovy_test_impl(ctx):
+def _groovy_test_impl(ctx):
   # Collect jars from the Groovy sdk
   groovy_sdk_jars = [file
       for file in ctx.files._groovysdk
@@ -208,22 +213,193 @@ def groovy_test_impl(ctx):
 
   # Return all dependencies needed to run the tests
   return struct(
-    runfiles=ctx.runfiles(files=list(all_deps) + ctx.files._jdk),
+    runfiles=ctx.runfiles(files=list(all_deps) + ctx.files.data + ctx.files._jdk),
   )
 
-groovy_test = rule(
-  implementation = groovy_test_impl,
-  attrs = {
-    "srcs": attr.label_list(mandatory=True, allow_files=FileType([".groovy"])),
-    "deps": attr.label_list(allow_files=FileType([".jar"])),
-    "jvm_flags": attr.string_list(),
-    "_groovysdk": attr.label(
-      default=Label("//external:groovy-sdk")),
-    "_jdk": attr.label(
-      default=Label("//tools/defaults:jdk")),
-    "_implicit_deps": attr.label_list(default=[
-      Label("//external:junit"),
-    ]),
-  },
-  test = True,
+_groovy_test = rule(
+    attrs = {
+        "srcs": attr.label_list(
+            mandatory = True,
+            allow_files = FileType([".groovy"]),
+        ),
+        "deps": attr.label_list(allow_files = FileType([".jar"])),
+        "data": attr.label_list(allow_files = True),
+        "jvm_flags": attr.string_list(),
+        "_groovysdk": attr.label(
+            default = Label("//external:groovy-sdk"),
+        ),
+        "_jdk": attr.label(
+            default = Label("//tools/defaults:jdk"),
+        ),
+        "_implicit_deps": attr.label_list(default = [
+            Label("//external:junit"),
+        ]),
+    },
+    test = True,
+    implementation = _groovy_test_impl,
 )
+
+def groovy_test(
+    name,
+    deps=[],
+    srcs=[],
+    data=[],
+    resources=[],
+    jvm_flags=[],
+    size="medium",
+    tags=[]):
+  # Create an extra jar to hold the resource files if any were specified
+  all_deps = deps
+  if resources:
+    native.java_library(
+      name = name + "-resources",
+      resources = resources,
+    )
+    all_deps += [name + "-resources"]
+
+  _groovy_test(
+    name = name,
+    size = size,
+    tags = tags,
+    srcs = srcs,
+    deps = all_deps,
+    data = data,
+    jvm_flags = jvm_flags,
+  )
+
+def groovy_junit_test(
+    name,
+    tests,
+    deps=[],
+    groovy_srcs=[],
+    java_srcs=[],
+    data=[],
+    resources=[],
+    jvm_flags=[],
+    size="small",
+    tags=[]):
+  groovy_lib_deps = deps + ["//external:junit"]
+  test_deps = deps + ["//external:junit"]
+
+  if len(tests) == 0:
+    fail("Must provide at least one file in tests")
+
+  # Put all Java sources into a Java library
+  if java_srcs:
+    native.java_library(
+      name = name + "-javalib",
+      srcs = java_srcs,
+      deps = deps + ["//external:junit"],
+    )
+    groovy_lib_deps += [name + "-javalib"]
+    test_deps += [name + "-javalib"]
+
+  # Put all tests and Groovy sources into a Groovy library
+  groovy_library(
+    name = name + "-groovylib",
+    srcs = tests + groovy_srcs,
+    deps = groovy_lib_deps,
+  )
+  test_deps += [name + "-groovylib"]
+
+  # Create a groovy test
+  groovy_test(
+    name = name,
+    deps = test_deps,
+    srcs = tests,
+    data = data,
+    resources = resources,
+    jvm_flags = jvm_flags,
+    size = size,
+    tags = tags,
+  )
+
+def spock_test(
+    name,
+    specs,
+    deps=[],
+    groovy_srcs=[],
+    java_srcs=[],
+    data=[],
+    resources=[],
+    jvm_flags=[],
+    size="small",
+    tags=[]):
+  groovy_lib_deps = deps + [
+    "//external:junit",
+    "//external:spock",
+  ]
+  test_deps = deps + [
+    "//external:junit",
+    "//external:spock",
+  ]
+
+  if len(specs) == 0:
+    fail("Must provide at least one file in specs")
+
+  # Put all Java sources into a Java library
+  if java_srcs:
+    native.java_library(
+      name = name + "-javalib",
+      srcs = java_srcs,
+      deps = deps + [
+        "//external:junit",
+        "//external:spock",
+      ],
+    )
+    groovy_lib_deps += [name + "-javalib"]
+    test_deps += [name + "-javalib"]
+
+  # Put all specs and Groovy sources into a Groovy library
+  groovy_library(
+    name = name + "-groovylib",
+    srcs = specs + groovy_srcs,
+    deps = groovy_lib_deps,
+  )
+  test_deps += [name + "-groovylib"]
+
+  # Create a groovy test
+  groovy_test(
+    name = name,
+    deps = test_deps,
+    srcs = specs,
+    data = data,
+    resources = resources,
+    jvm_flags = jvm_flags,
+    size = size,
+    tags = tags,
+  )
+
+def groovy_repositories():
+  native.new_http_archive(
+    name = "groovy-sdk-artifact",
+    url = "http://dl.bintray.com/groovy/maven/apache-groovy-binary-2.4.4.zip",
+    sha256 = "a7cc1e5315a14ea38db1b2b9ce0792e35174161141a6a3e2ef49b7b2788c258c",
+    build_file = "groovy.BUILD",
+  )
+  native.bind(
+    name = "groovy-sdk",
+    actual = "@groovy-sdk-artifact//:sdk",
+  )
+  native.bind(
+    name = "groovy",
+    actual = "@groovy-sdk-artifact//:groovy",
+  )
+
+  native.maven_jar(
+    name = "junit-artifact",
+    artifact = "junit:junit:4.12",
+  )
+  native.bind(
+    name = "junit",
+    actual = "@junit-artifact//jar",
+  )
+
+  native.maven_jar(
+    name = "spock-artifact",
+    artifact = "org.spockframework:spock-core:0.7-groovy-2.0",
+  )
+  native.bind(
+    name = "spock",
+    actual = "@spock-artifact//jar",
+  )

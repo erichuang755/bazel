@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,7 +18,6 @@ import static java.nio.charset.StandardCharsets.ISO_8859_1;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Joiner;
-import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -56,6 +55,7 @@ import com.google.devtools.build.lib.rules.cpp.Link.LinkTargetType;
 import com.google.devtools.build.lib.rules.cpp.LinkerInputs.LibraryToLink;
 import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.util.OS;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.util.ShellEscaper;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
@@ -64,6 +64,7 @@ import com.google.devtools.build.lib.vfs.PathFragment;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -288,9 +289,7 @@ public final class CppLinkAction extends AbstractAction {
 
   @Override
   public String describeStrategy(Executor executor) {
-    return fake
-        ? "fake,local"
-        : executor.getContext(CppLinkActionContext.class).strategyLocality(this);
+    return fake ? "fake,local" : executor.getContext(CppLinkActionContext.class).strategyLocality();
   }
 
   // Don't forget to update FAKE_LINK_GUID if you modify this method.
@@ -517,7 +516,6 @@ public final class CppLinkAction extends AbstractAction {
     private final AnalysisEnvironment analysisEnvironment;
     private final Artifact output;
 
-    @Nullable private PathFragment interfaceOutputPath;
     // can be null for CppLinkAction.createTestBuilder()
     @Nullable private final CcToolchainProvider toolchain;
     private Artifact interfaceOutput;
@@ -539,6 +537,8 @@ public final class CppLinkAction extends AbstractAction {
     private final List<String> linkopts = new ArrayList<>();
     private LinkTargetType linkType = LinkTargetType.STATIC_LIBRARY;
     private LinkStaticness linkStaticness = LinkStaticness.FULLY_STATIC;
+    private List<Artifact> ltoBitcodeFiles = new ArrayList<>();
+
     private boolean fake;
     private boolean isNativeDeps;
     private boolean useTestOnlyFlags;
@@ -631,11 +631,23 @@ public final class CppLinkAction extends AbstractAction {
 
     private Iterable<LTOBackendArtifacts> createLTOArtifacts(
         PathFragment ltoOutputRootPrefix, NestedSet<LibraryToLink> uniqueLibraries) {
+      Set<Artifact> compiled = new LinkedHashSet<>();
+      for (LibraryToLink lib : uniqueLibraries) {
+        Iterables.addAll(compiled, lib.getLTOBitcodeFiles());
+      }
+
       // This flattens the set of object files, so for M binaries and N .o files,
       // this is O(M*N). If we had a nested set of .o files, we could have O(M + N) instead.
       NestedSetBuilder<Artifact> bitcodeBuilder = NestedSetBuilder.stableOrder();
       for (LibraryToLink lib : uniqueLibraries) {
-        bitcodeBuilder.addAll(lib.getObjectFiles());
+        if (!lib.containsObjectFiles()) {
+          continue;
+        }
+        for (Artifact a : lib.getObjectFiles()) {
+          if (compiled.contains(a)) {
+            bitcodeBuilder.add(a);
+          }
+        }
       }
       for (LinkerInput input : nonLibraries) {
         // This relies on file naming conventions. It would be less fragile to have a dedicated
@@ -712,11 +724,12 @@ public final class CppLinkAction extends AbstractAction {
           : ruleContext.getFeatures();
 
       final LibraryToLink outputLibrary =
-          LinkerInputs.newInputLibrary(output, filteredNonLibraryArtifacts);
+          LinkerInputs.newInputLibrary(output, filteredNonLibraryArtifacts, this.ltoBitcodeFiles);
       final LibraryToLink interfaceOutputLibrary =
           (interfaceOutput == null)
               ? null
-              : LinkerInputs.newInputLibrary(interfaceOutput, filteredNonLibraryArtifacts);
+              : LinkerInputs.newInputLibrary(
+                  interfaceOutput, filteredNonLibraryArtifacts, this.ltoBitcodeFiles);
 
       final ImmutableMap<Artifact, Artifact> linkstampMap =
           mapLinkstampsToOutputs(linkstamps, ruleContext, output, linkArtifactFactory);
@@ -768,7 +781,8 @@ public final class CppLinkAction extends AbstractAction {
               .setUseTestOnlyFlags(useTestOnlyFlags)
               .setNeedWholeArchive(needWholeArchive)
               .setParamFile(paramFile)
-              .setAllLTOArtifacts(isLTOIndexing ? null : allLTOArtifacts);
+              .setAllLTOArtifacts(isLTOIndexing ? null : allLTOArtifacts)
+              .setToolchain(toolchain);
 
       if (!isLTOIndexing) {
         linkCommandLineBuilder
@@ -815,22 +829,39 @@ public final class CppLinkAction extends AbstractAction {
           LinkerInputs.toLibraryArtifacts(
               Link.mergeInputsDependencies(
                   uniqueLibraries, needWholeArchive, cppConfiguration.archiveType()));
-
+      Iterable<Artifact> expandedNonLibraryInputs = LinkerInputs.toLibraryArtifacts(nonLibraries);
       if (!isLTOIndexing && allLTOArtifacts != null) {
-        // This is the real link, rename the inputs.
-        List<Artifact> renamed = new ArrayList<>();
+        // We are doing LTO, and this is the real link, so substitute
+        // the LTO bitcode files with the real object files they were translated into.
+        Map<Artifact, Artifact> ltoMapping = new HashMap<>();
         for (LTOBackendArtifacts a : allLTOArtifacts) {
-          renamed.add(a.getObjectFile());
+          ltoMapping.put(a.getBitcodeFile(), a.getObjectFile());
         }
-        expandedInputs = renamed;
+
+        // Handle libraries.
+        List<Artifact> renamedInputs = new ArrayList<>();
+        for (Artifact a : expandedInputs) {
+          Artifact renamed = ltoMapping.get(a);
+          renamedInputs.add(renamed == null ? a : renamed);
+        }
+        expandedInputs = renamedInputs;
+
+        // Handle non-libraries.
+        List<Artifact> renamedNonLibraryInputs = new ArrayList<>();
+        for (Artifact a : expandedNonLibraryInputs) {
+          Artifact renamed = ltoMapping.get(a);
+          renamedNonLibraryInputs.add(renamed == null ? a : renamed);
+        }
+        expandedNonLibraryInputs = renamedNonLibraryInputs;
       }
 
       // getPrimaryInput returns the first element, and that is a public interface - therefore the
       // order here is important.
-      IterablesChain.Builder<Artifact> inputsBuilder = IterablesChain.<Artifact>builder()
-          .add(ImmutableList.copyOf(LinkerInputs.toLibraryArtifacts(nonLibraries)))
-          .add(dependencyInputsBuilder.build())
-          .add(ImmutableIterable.from(expandedInputs));
+      IterablesChain.Builder<Artifact> inputsBuilder =
+          IterablesChain.<Artifact>builder()
+              .add(ImmutableList.copyOf(expandedNonLibraryInputs))
+              .add(dependencyInputsBuilder.build())
+              .add(ImmutableIterable.from(expandedInputs));
 
       if (linkCommandLine.getParamFile() != null) {
         inputsBuilder.add(ImmutableList.of(linkCommandLine.getParamFile()));
@@ -989,6 +1020,13 @@ public final class CppLinkAction extends AbstractAction {
       this.nonLibraries.add(input);
     }
 
+    public Builder addLTOBitcodeFiles(Iterable<Artifact> files) {
+      for (Artifact a : files) {
+        ltoBitcodeFiles.add(a);
+      }
+      return this;
+    }
+
     /**
      * Adds a single artifact to the set of inputs (C++ source files, header files, etc). Artifacts
      * that are not of recognized types will be used for dependency checking but will not be passed
@@ -1081,9 +1119,6 @@ public final class CppLinkAction extends AbstractAction {
       this.linkstamps.addAll(linkstamps.keySet());
       // Add inputs for linkstamping.
       if (!linkstamps.isEmpty()) {
-        // This will just be the compiler unless include scanning is disabled, in which case it will
-        // include all header files. Since we insist that linkstamps declare all their headers, all
-        // header files would be overkill, but that only happens when include scanning is disabled.
         addTransitiveCompilationInputs(toolchain.getCompile());
         for (Map.Entry<Artifact, ImmutableList<Artifact>> entry : linkstamps.entrySet()) {
           addCompilationInputs(entry.getValue());
@@ -1122,6 +1157,12 @@ public final class CppLinkAction extends AbstractAction {
     public Builder addLinkParams(CcLinkParams linkParams, RuleErrorConsumer errorListener) {
       addLinkopts(linkParams.flattenedLinkopts());
       addLibraries(linkParams.getLibraries());
+      ExtraLinkTimeLibraries extraLinkTimeLibraries = linkParams.getExtraLinkTimeLibraries();
+      if (extraLinkTimeLibraries != null) {
+        for (ExtraLinkTimeLibrary extraLibrary : extraLinkTimeLibraries.getExtraLibraries()) {
+          addLibraries(extraLibrary.buildLibraries(ruleContext));
+        }
+      }
       addLinkstamps(CppHelper.resolveLinkstamps(errorListener, linkParams));
       return this;
     }

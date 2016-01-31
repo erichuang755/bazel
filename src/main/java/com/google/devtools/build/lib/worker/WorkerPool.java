@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,9 +19,6 @@ import com.google.devtools.build.lib.vfs.Path;
 import org.apache.commons.pool2.impl.GenericKeyedObjectPool;
 import org.apache.commons.pool2.impl.GenericKeyedObjectPoolConfig;
 
-import java.util.HashSet;
-import java.util.Set;
-
 import javax.annotation.concurrent.ThreadSafe;
 
 /**
@@ -33,12 +30,6 @@ import javax.annotation.concurrent.ThreadSafe;
 @ThreadSafe
 final class WorkerPool extends GenericKeyedObjectPool<WorkerKey, Worker> {
   final WorkerFactory workerFactory;
-  final Set<Worker> workers = new HashSet<>();
-
-  public WorkerPool(WorkerFactory factory) {
-    super(factory);
-    this.workerFactory = factory;
-  }
 
   public WorkerPool(WorkerFactory factory, GenericKeyedObjectPoolConfig config) {
     super(factory, config);

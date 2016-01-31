@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright 2015 Google Inc. All rights reserved.
+# Copyright 2015 The Bazel Authors. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -26,18 +26,12 @@ function query() {
 
 # Compile bazel
 [ -f "output/bazel" ] || ./compile.sh compile >&2 || exit $?
-([ -f "tools/jdk/JavaBuilder_deploy.jar" ] \
-  && [ -f "tools/jdk/ijar" ] \
-  && [ -f "tools/jdk/SingleJar_deploy.jar" ] \
-  && [ -f "tools/jdk/GenClass_deploy.jar" ]) \
-  || ./compile.sh tools,init output/bazel >&2 \
-  || exit $?
 
 # Build almost everything.
 # //third_party/ijar/test/... is disabled due to #273.
 # xcode and android tools do not work out of the box.
 ./output/bazel build -- //src/{main,java_tools,test/{java,cpp}}/... //third_party/... \
-  -//third_party/ijar/test/... -//third_party/java_src/j2objc/... >&2 \
+  -//third_party/ijar/test/... -//third_party/java/j2objc/... >&2 \
   || exit $?
 
 # Source roots.

@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -45,6 +45,9 @@ public final class OsUtils {
   }
 
   private static boolean jniLibsAvailable() {
+    if ("0".equals(System.getProperty("io.bazel.UnixFileSystem"))) {
+      return false;
+    }
     // JNI libraries work fine on Windows, but at the moment we are not using any.
     return OS.getCurrent() != OS.WINDOWS;
   }

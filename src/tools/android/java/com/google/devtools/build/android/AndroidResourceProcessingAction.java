@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@ package com.google.devtools.build.android;
 import com.google.common.base.Joiner;
 import com.google.common.base.Stopwatch;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.hash.Hashing;
 import com.google.devtools.build.android.Converters.DependencyAndroidDataListConverter;
 import com.google.devtools.build.android.Converters.ExistingPathConverter;
@@ -65,7 +66,6 @@ import java.util.logging.Logger;
  *      --primaryData path/to/resources:path/to/assets:path/to/manifest:path/to/R.txt
  *      --data p/t/res1:p/t/assets1:p/t/1/AndroidManifest.xml:p/t/1/R.txt,\
  *             p/t/res2:p/t/assets2:p/t/2/AndroidManifest.xml:p/t/2/R.txt
- *      --generatedSourcePath path/to/write/generated/sources
  *      --packagePath path/to/write/archive.ap_
  *      --srcJarOutput path/to/write/archive.srcjar
  * </pre>
@@ -138,18 +138,21 @@ public class AndroidResourceProcessingAction {
         defaultValue = "",
         converter = DependencyAndroidDataListConverter.class,
         category = "input",
-        help = "Additional Data dependencies. These values will be used if not defined in the "
+        help = "Transitive Data dependencies. These values will be used if not defined in the "
             + "primary resources. The expected format is "
-            + "resources[#resources]:assets[#assets]:manifest:r.txt:symbols.txt"
-            + "[,resources[#resources]:assets[#assets]:manifest:r.txt:symbols.txt]")
-    public List<DependencyAndroidData> data;
+            + "resources[#resources]:assets[#assets]:manifest:r.txt:symbols.bin"
+            + "[,resources[#resources]:assets[#assets]:manifest:r.txt:symbols.bin]")
+    public List<DependencyAndroidData> transitiveData;
 
-    @Option(name = "generatedSourcePath",
-        defaultValue = "null",
-        converter = PathConverter.class,
-        category = "output",
-        help = "Path for generated sources.")
-    public Path generatedSourcePath;
+    @Option(name = "directData",
+        defaultValue = "",
+        converter = DependencyAndroidDataListConverter.class,
+        category = "input",
+        help = "Direct Data dependencies. These values will be used if not defined in the "
+            + "primary resources. The expected format is "
+            + "resources[#resources]:assets[#assets]:manifest:r.txt:symbols.bin"
+            + "[,resources[#resources]:assets[#assets]:manifest:r.txt:symbols.bin]")
+    public List<DependencyAndroidData> directData;
 
     @Option(name = "rOutput",
         defaultValue = "null",
@@ -178,6 +181,13 @@ public class AndroidResourceProcessingAction {
         category = "output",
         help = "Path for the proguard file.")
     public Path proguardOutput;
+
+    @Option(name = "manifestOutput",
+        defaultValue = "null",
+        converter = PathConverter.class,
+        category = "output",
+        help = "Path for the modified manifest.")
+    public Path manifestOutput;
 
     @Option(name = "srcJarOutput",
         defaultValue = "null",
@@ -292,18 +302,33 @@ public class AndroidResourceProcessingAction {
       expandedOut.toFile().deleteOnExit();
       Path deduplicatedOut = Files.createTempDirectory("tmp-deduplicated");
       deduplicatedOut.toFile().deleteOnExit();
-      
+
+      Path generatedSources = null;
+      if (options.srcJarOutput != null || options.rOutput != null
+          || options.symbolsTxtOut != null) {
+        generatedSources = Files.createTempDirectory("generated_resources");
+        generatedSources.toFile().deleteOnExit();
+      }
+
       LOGGER.fine(String.format("Setup finished at %sms", timer.elapsed(TimeUnit.MILLISECONDS)));
 
       final ImmutableList<DirectoryModifier> modifiers = ImmutableList.of(
           new PackedResourceTarExpander(expandedOut, working),
           new FileDeDuplicator(Hashing.murmur3_128(), deduplicatedOut, working));
 
+      // Resources can appear in both the direct dependencies and transitive -- use a set to
+      // ensure depeduplication.
+      List<DependencyAndroidData> data =
+          ImmutableSet.<DependencyAndroidData>builder()
+              .addAll(options.directData)
+              .addAll(options.transitiveData)
+              .build()
+              .asList();
       final AndroidBuilder builder = sdkTools.createAndroidBuilder();
 
       final MergedAndroidData mergedData = resourceProcessor.mergeData(
           options.primaryData,
-          options.data,
+          data,
           mergedResources,
           mergedAssets,
           modifiers,
@@ -330,20 +355,24 @@ public class AndroidResourceProcessingAction {
           options.versionCode,
           options.versionName,
           filteredData,
-          options.data,
+          data,
           working.resolve("manifest"),
-          options.generatedSourcePath,
+          generatedSources,
           options.packagePath,
-          options.proguardOutput);
+          options.proguardOutput,
+          options.manifestOutput);
       LOGGER.fine(String.format("appt finished at %sms", timer.elapsed(TimeUnit.MILLISECONDS)));
       if (options.srcJarOutput != null) {
-        resourceProcessor.createSrcJar(options.generatedSourcePath, options.srcJarOutput);
+        resourceProcessor.createSrcJar(generatedSources, options.srcJarOutput,
+            VariantConfiguration.Type.LIBRARY == options.packageType);
       }
       if (options.rOutput != null) {
-        resourceProcessor.copyRToOutput(options.generatedSourcePath, options.rOutput);
+        resourceProcessor.copyRToOutput(generatedSources, options.rOutput,
+            VariantConfiguration.Type.LIBRARY == options.packageType);
       }
       if (options.symbolsTxtOut != null) {
-        resourceProcessor.copyRToOutput(options.generatedSourcePath, options.symbolsTxtOut);
+        resourceProcessor.copyRToOutput(generatedSources, options.symbolsTxtOut,
+            VariantConfiguration.Type.LIBRARY == options.packageType);
       }
       LOGGER.fine(String.format("Packaging finished at %sms",
           timer.elapsed(TimeUnit.MILLISECONDS)));

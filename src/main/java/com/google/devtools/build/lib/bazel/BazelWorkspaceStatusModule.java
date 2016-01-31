@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,7 +16,6 @@ package com.google.devtools.build.lib.bazel;
 import static com.google.common.base.StandardSystemProperty.USER_NAME;
 
 import com.google.common.base.Joiner;
-import com.google.common.base.Preconditions;
 import com.google.common.base.Supplier;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -39,14 +38,16 @@ import com.google.devtools.build.lib.analysis.WorkspaceStatusAction.Key;
 import com.google.devtools.build.lib.analysis.WorkspaceStatusAction.KeyType;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.runtime.BlazeModule;
-import com.google.devtools.build.lib.runtime.BlazeRuntime;
 import com.google.devtools.build.lib.runtime.Command;
+import com.google.devtools.build.lib.runtime.CommandEnvironment;
 import com.google.devtools.build.lib.runtime.GotOptionsEvent;
 import com.google.devtools.build.lib.shell.CommandException;
 import com.google.devtools.build.lib.shell.CommandResult;
 import com.google.devtools.build.lib.util.CommandBuilder;
 import com.google.devtools.build.lib.util.NetUtil;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
+import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.common.options.OptionsBase;
 
@@ -75,7 +76,8 @@ public class BazelWorkspaceStatusModule extends BlazeModule {
 
     private BazelWorkspaceStatusAction(
         WorkspaceStatusAction.Options options,
-        BlazeRuntime runtime,
+        Map<String, String> clientEnv,
+        Path workspace,
         Artifact stableStatus,
         Artifact volatileStatus) {
       super(BuildInfoHelper.BUILD_INFO_ACTION_OWNER, Artifact.NO_ARTIFACTS,
@@ -94,8 +96,8 @@ public class BazelWorkspaceStatusModule extends BlazeModule {
                   // Pass client env, because certain SCM client(like
                   // perforce, git) relies on environment variables to work
                   // correctly.
-                  .setEnv(runtime.getClientEnv())
-                  .setWorkingDir(runtime.getWorkspace())
+                  .setEnv(clientEnv)
+                  .setWorkingDir(workspace)
                   .useShell(true)
                   .build();
     }
@@ -218,14 +220,15 @@ public class BazelWorkspaceStatusModule extends BlazeModule {
     @Override
     public WorkspaceStatusAction createWorkspaceStatusAction(
         ArtifactFactory factory, ArtifactOwner artifactOwner, Supplier<UUID> buildId) {
-      Root root = runtime.getDirectories().getBuildDataDirectory();
+      Root root = env.getDirectories().getBuildDataDirectory();
 
       Artifact stableArtifact = factory.getDerivedArtifact(
           new PathFragment("stable-status.txt"), root, artifactOwner);
       Artifact volatileArtifact = factory.getConstantMetadataArtifact(
           new PathFragment("volatile-status.txt"), root, artifactOwner);
 
-      return new BazelWorkspaceStatusAction(options, runtime, stableArtifact, volatileArtifact);
+      return new BazelWorkspaceStatusAction(options, env.getClientEnv(),
+          env.getDirectories().getWorkspace(), stableArtifact, volatileArtifact);
     }
   }
 
@@ -254,13 +257,19 @@ public class BazelWorkspaceStatusModule extends BlazeModule {
     }
   }
 
-  private BlazeRuntime runtime;
+  private CommandEnvironment env;
   private WorkspaceStatusAction.Options options;
 
   @Override
-  public void beforeCommand(BlazeRuntime runtime, Command command) {
-    this.runtime = runtime;
-    runtime.getEventBus().register(this);
+  public void beforeCommand(Command command, CommandEnvironment env) {
+    this.env = env;
+    env.getEventBus().register(this);
+  }
+
+  @Override
+  public void afterCommand() {
+    this.env = null;
+    this.options = null;
   }
 
   @Override

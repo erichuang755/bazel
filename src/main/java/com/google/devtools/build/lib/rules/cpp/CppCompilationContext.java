@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,7 +15,6 @@
 package com.google.devtools.build.lib.rules.cpp;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
@@ -30,6 +29,7 @@ import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.util.Pair;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.PathFragment;
 
 import java.util.LinkedHashSet;
@@ -273,7 +273,7 @@ public final class CppCompilationContext implements TransitiveInfoProvider {
   /**
    * @return modules maps from direct dependencies.
    */
-  private NestedSet<Artifact> getDirectModuleMaps() {
+  public NestedSet<Artifact> getDirectModuleMaps() {
     NestedSetBuilder<Artifact> builder = NestedSetBuilder.stableOrder();
     for (DepsContext depsContext : depsContexts) {
       builder.addTransitive(depsContext.directModuleMaps);

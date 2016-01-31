@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -115,9 +115,12 @@ public final class LTOBackendArtifacts {
     builder.addInput(index);
     builder.addInput(beCommandline);
     builder.addTransitiveInputs(CppHelper.getToolchain(ruleContext).getCompile());
+
+    // The backend compile invokes ld too.
+    builder.addTransitiveInputs(CppHelper.getToolchain(ruleContext).getLink());
     builder.addOutput(objectFile);
 
-    builder.setProgressMessage("LTO Backend Compile");
+    builder.setProgressMessage("LTO Backend Compile " + objectFile.getFilename());
     builder.setMnemonic("CcLtoBackendCompile");
 
     // The command-line doesn't specify the full path to clang++, so we set it in the
@@ -127,8 +130,7 @@ public final class LTOBackendArtifacts {
     PathFragment compiler = cppConfiguration.getCppExecutable();
 
     builder.setShellCommand(beCommandline.getExecPathString());
-    builder.setEnvironment(
-        ImmutableMap.of("CLANGXX", compiler.replaceName("clang++").getPathString()));
+    builder.setEnvironment(ImmutableMap.of("CLANG", compiler.replaceName("clang").getPathString()));
 
     ruleContext.registerAction(builder.build(ruleContext));
   }

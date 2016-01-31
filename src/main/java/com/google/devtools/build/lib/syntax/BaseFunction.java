@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,16 +14,21 @@
 package com.google.devtools.build.lib.syntax;
 
 import com.google.common.base.Joiner;
-import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Ordering;
 import com.google.common.collect.Sets;
 import com.google.devtools.build.lib.events.Location;
-import com.google.devtools.build.lib.packages.Type.ConversionException;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkSignature;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkValue;
+import com.google.devtools.build.lib.syntax.SkylarkList.Tuple;
+import com.google.devtools.build.lib.syntax.Type.ConversionException;
+import com.google.devtools.build.lib.syntax.compiler.ByteCodeUtils;
+import com.google.devtools.build.lib.util.Preconditions;
 
-import java.io.Serializable;
+import net.bytebuddy.implementation.bytecode.StackManipulation;
+
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -60,7 +65,7 @@ import javax.annotation.Nullable;
 // Provide optimized argument frobbing depending of FunctionSignature and CallerSignature
 // (that FuncallExpression must supply), optimizing for the all-positional and all-keyword cases.
 // Also, use better pure maps to minimize map O(n) re-creation events when processing keyword maps.
-public abstract class BaseFunction implements Serializable {
+public abstract class BaseFunction implements SkylarkValue {
 
   // The name of the function
   private final String name;
@@ -232,11 +237,11 @@ public abstract class BaseFunction implements Serializable {
       // and this is actually the same as in Python.
       int starParamIndex = numNamedParams;
       if (numPositionalArgs > numPositionalParams) {
-        arguments[starParamIndex] = SkylarkList.tuple(
-            args.subList(numPositionalParams, numPositionalArgs));
+        arguments[starParamIndex] =
+            Tuple.copyOf(args.subList(numPositionalParams, numPositionalArgs));
         numPositionalArgs = numPositionalParams; // clip numPositionalArgs
       } else {
-        arguments[starParamIndex] = SkylarkList.EMPTY_TUPLE;
+        arguments[starParamIndex] = Tuple.EMPTY;
       }
     } else if (numPositionalArgs > numPositionalParams) {
       throw new EvalException(loc,
@@ -402,6 +407,15 @@ public abstract class BaseFunction implements Serializable {
     return parent;
   }
 
+  public static final StackManipulation call =
+      ByteCodeUtils.invoke(
+          BaseFunction.class,
+          "call",
+          List.class,
+          Map.class,
+          FuncallExpression.class,
+          Environment.class);
+
   /**
    * The outer calling convention to a BaseFunction.
    *
@@ -561,5 +575,15 @@ public abstract class BaseFunction implements Serializable {
   @Nullable
   public Location getLocation() {
     return location;
+  }
+
+  @Override
+  public boolean isImmutable() {
+    return true;
+  }
+
+  @Override
+  public void write(Appendable buffer, char quotationMark) {
+    Printer.append(buffer, "<function " + getName() + ">");
   }
 }

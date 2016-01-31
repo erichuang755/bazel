@@ -10,7 +10,6 @@ filegroup(
         "//third_party/java/j2objc:srcs",
         "//third_party/java/jarjar:srcs",
         "//third_party/java/jdk/langtools:srcs",
-        "//third_party/java_src/j2objc/jre_emul:srcs",
         "//third_party/py/concurrent:srcs",
         "//third_party/py/gflags:srcs",
         "//third_party/py/mock:srcs",
@@ -70,6 +69,11 @@ java_import(
 )
 
 java_import(
+    name = "apache_commons_codec",
+    jars = ["apache_commons_codec/commons-codec-1.9.jar"],
+)
+
+java_import(
     name = "apache_commons_collections",
     jars = ["apache_commons_collections/commons-collections-3.2.1.jar"],
 )
@@ -106,7 +110,17 @@ java_import(
 
 java_import(
     name = "asm",
-    jars = ["asm/asm-5.0.3.jar"],
+    jars = ["asm/asm-5.0.4.jar"],
+)
+
+java_import(
+    name = "asm-commons",
+    jars = ["asm/asm-commons-5.0.4.jar"],
+)
+
+java_import(
+    name = "asm-util",
+    jars = ["asm/asm-util-5.0.4.jar"],
 )
 
 java_plugin(
@@ -179,6 +193,16 @@ java_import(
 )
 
 java_import(
+    name = "bytebuddy",
+    jars = ["bytebuddy/byte-buddy-dep-0.7-rc6.jar"],
+    deps = [
+        ":asm",
+        ":asm-commons",
+        ":asm-util",
+    ],
+)
+
+java_import(
     name = "gson",
     jars = ["gson/gson-2.2.4.jar"],
 )
@@ -186,12 +210,31 @@ java_import(
 java_import(
     name = "error_prone",
     jars = [
-        "error_prone/error_prone_core-2.0.5-20150630-51ec2fd.jar",
-        "error_prone/error_prone_annotations-2.0.5-20150630-51ec2fd.jar",
+        "error_prone/error_prone_core-2.0.8-20151216.jar",
+        "error_prone/error_prone_annotations-2.0.8-20151216.jar",
+        "error_prone/error_prone_annotation-2.0.8-20151216.jar",
     ],
     exports = [
         ":checker_framework_dataflow",
+        ":guava",
+        ":jcip_annotations",
         ":jformatstring",
+        ":jsr305",
+        ":pcollections",
+    ],
+)
+
+java_import(
+    name = "jcip_annotations",
+    jars = [
+        "jcip_annotations/jcip-annotations-1.0-1.jar",
+    ],
+)
+
+java_import(
+    name = "pcollections",
+    jars = [
+        "pcollections/pcollections-2.1.2.jar",
     ],
 )
 
@@ -214,21 +257,35 @@ filegroup(
     name = "error_prone-jars",
     srcs = [
         "checker_framework_dataflow/dataflow-1.8.10.jar",
-        "error_prone/error_prone_annotations-2.0.5-20150630-51ec2fd.jar",
-        "error_prone/error_prone_core-2.0.5-20150630-51ec2fd.jar",
+        "error_prone/error_prone_annotation-2.0.8-20151216.jar",
+        "error_prone/error_prone_annotations-2.0.8-20151216.jar",
+        "error_prone/error_prone_core-2.0.8-20151216.jar",
+        "guava/guava-19.0.jar",
+        "jcip_annotations/jcip-annotations-1.0-1.jar",
         "jformatstring/jFormatString-3.0.0.jar",
+        "jsr305/jsr-305.jar",
+        "pcollections/pcollections-2.1.2.jar",
     ],
 )
 
 java_import(
     name = "guava",
-    jars = ["guava/guava-18.0.jar"],
+    jars = ["guava/guava-19.0.jar"],
+)
+
+java_import(
+    name = "guice",
+    jars = [
+        "guice/guice-4.0-no_aop.jar",
+        "guice/guice-multibindings-4.0.jar",
+        "jsr330_inject/javax.inject.jar",
+    ],
 )
 
 # For bootstrapping JavaBuilder
 filegroup(
     name = "guava-jars",
-    srcs = ["guava/guava-18.0.jar"],
+    srcs = ["guava/guava-19.0.jar"],
 )
 
 java_import(
@@ -239,6 +296,11 @@ java_import(
 java_import(
     name = "joda_time",
     jars = ["joda_time/joda-time-2.3.jar"],
+)
+
+java_import(
+    name = "jsch",
+    jars = ["jsch/jsch-0.1.51.jar"],
 )
 
 java_import(
@@ -255,6 +317,11 @@ filegroup(
 java_import(
     name = "jsr330_inject",
     jars = ["jsr330_inject/javax.inject.jar"],
+)
+
+java_import(
+    name = "maven",
+    jars = glob(["maven/*.jar"]),
 )
 
 java_import(
@@ -284,13 +351,13 @@ java_import(
 
 java_import(
     name = "protobuf",
-    jars = ["protobuf/protobuf-java-3.0.0-alpha-3.jar"],
+    jars = ["protobuf/protobuf-java-3.0.0-beta-1.jar"],
 )
 
 # For bootstrapping JavaBuilder
 filegroup(
     name = "protobuf-jars",
-    srcs = ["protobuf/protobuf-java-3.0.0-alpha-3.jar"],
+    srcs = ["protobuf/protobuf-java-3.0.0-beta-1.jar"],
 )
 
 java_import(
@@ -328,7 +395,7 @@ java_import(
 
 java_import(
     name = "truth",
-    jars = ["truth/truth-0.27.jar"],
+    jars = ["truth/truth-0.28.jar"],
 )
 
 cc_library(
@@ -339,6 +406,9 @@ cc_library(
     ],
     hdrs = [
         "gtest/gtest.h",
+    ],
+    data = [
+        "//tools:test_sharding_compliant",
     ],
     includes = ["."],
     # gtest detects pthread, and the linker fails without it.

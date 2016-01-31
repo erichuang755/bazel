@@ -2,16 +2,27 @@
 
 ## Rules
 
-* [`d_library`](#d_library)
-* [`d_source_library`](#d_source_library)
-* [`d_binary`](#d_binary)
-* [`d_test`](#d_test)
-* [`d_docs`](#d_docs)
+<div class="toc">
+  <h2>Rules</h2>
+  <ul>
+    <li><a href="#d_library">d_library</a></li>
+    <li><a href="#d_source_library">d_source_library</a></li>
+    <li><a href="#d_binary">d_binary</a></li>
+    <li><a href="#d_test">d_test</a></li>
+    <li><a href="#d_docs">d_docs</a></li>
+  </ul>
+</div>
 
 ## Setup
 
-To use the D rules, simply copy the contents of `d.WORKSPACE` into your
-`WORKSPACE` file.
+To use the D rules, add the following to your `WORKSPACE` file to add the
+external repositories for the D toolchain:
+
+```python
+load("/tools/build_defs/d/d", "d_repositories")
+
+d_repositories()
+```
 
 ## Roadmap
 
@@ -30,11 +41,14 @@ To use the D rules, simply copy the contents of `d.WORKSPACE` into your
 d_library(name, srcs, deps, includes, linkopts, versions)
 ```
 
-<table>
+<table class="table table-condensed table-bordered table-params">
+  <colgroup>
+    <col class="col-param" />
+    <col class="param-description" />
+  </colgroup>
   <thead>
     <tr>
-      <th>Attribute</th>
-      <th>Description</th>
+      <th colspan="2">Attributes</th>
     </tr>
   </thead>
   <tbody>
@@ -141,11 +155,15 @@ d_binary(
 d_source_library(name, srcs, deps, includes, linkopts, versions)
 ```
 
-<table>
+
+<table class="table table-condensed table-bordered table-params">
+  <colgroup>
+    <col class="col-param" />
+    <col class="param-description" />
+  </colgroup>
   <thead>
     <tr>
-      <th>Attribute</th>
-      <th>Description</th>
+      <th colspan="2">Attributes</th>
     </tr>
   </thead>
   <tbody>
@@ -282,11 +300,14 @@ d_binary(
 d_binary(name, srcs, deps, includes, linkopts, versions)
 ```
 
-<table>
+<table class="table table-condensed table-bordered table-params">
+  <colgroup>
+    <col class="col-param" />
+    <col class="param-description" />
+  </colgroup>
   <thead>
     <tr>
-      <th>Attribute</th>
-      <th>Description</th>
+      <th colspan="2">Attributes</th>
     </tr>
   </thead>
   <tbody>
@@ -420,11 +441,14 @@ d_binary(
 d_test(name, srcs, deps, includes, linkopts, versions)
 ```
 
-<table>
+<table class="table table-condensed table-bordered table-params">
+  <colgroup>
+    <col class="col-param" />
+    <col class="param-description" />
+  </colgroup>
   <thead>
     <tr>
-      <th>Attribute</th>
-      <th>Description</th>
+      <th colspan="2">Attributes</th>
     </tr>
   </thead>
   <tbody>
@@ -574,14 +598,17 @@ bazel test //hello_lib:greeter_test
 ## d_docs
 
 ```python
-d_docs(name, srcs, imports)
+d_docs(name, dep)
 ```
 
-<table>
+<table class="table table-condensed table-bordered table-params">
+  <colgroup>
+    <col class="col-param" />
+    <col class="param-description" />
+  </colgroup>
   <thead>
     <tr>
-      <th>Attribute</th>
-      <th>Description</th>
+      <th colspan="2">Attributes</th>
     </tr>
   </thead>
   <tbody>
@@ -593,21 +620,14 @@ d_docs(name, srcs, imports)
       </td>
     </tr>
     <tr>
-      <td><code>srcs</code></td>
+      <td><code>dep</code></td>
       <td>
-        <code>List of labels, required</code>
+        <code>Label, required</code>
+        <p>The label of the target to generate code documentation for.</p>
         <p>
-          List of D <code>.d</code> source files to generate documentation for.
-        </p>
-      </td>
-    </tr>
-    <tr>
-      <td><code>imports</code></td>
-      <td>
-        <code>List of strings, optional</code>
-        <p>List of import dirs to add to the compile line.</p>
-        <p>
-          These will be passed to the D compiler via <code>-I</code> flags.
+          <code>d_docs</code> can generate HTML code documentation for the
+          source files of <code>d_library</code>, <code>d_source_library</code>,
+          <code>d_binary</code>, or <code>d_test</code> targets.
         </p>
       </td>
     </tr>
@@ -628,20 +648,27 @@ Suppose you have the following directory structure for a D project:
         baz.d
 ```
 
-To generate HTML documentation for the `foo` package, define a `d_docs` target:
+The `foo/` directory contains the sources for the `d_library` `foo`. To
+generate HTML documentation for the `foo` library, define a `d_docs` target
+that takes the `d_library` `foo` as its dependency:
 
 `foo/BUILD`:
 
 ```python
-load("/tools/build_defs/d/d", "d_docs")
+load("/tools/build_defs/d/d", "d_library", "d_docs")
 
-d_docs(
-    name = "foo_docs",
+d_library(
+    name = "foo",
     srcs = [
         "foo.d",
         "bar.d",
         "baz.d",
     ],
+)
+
+d_docs(
+    name = "foo_docs",
+    dep = ":foo",
 )
 ```
 

@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@ import com.google.devtools.build.lib.actions.ActionContextProvider;
 import com.google.devtools.build.lib.actions.Executor.ActionContext;
 import com.google.devtools.build.lib.buildtool.BuildRequest;
 import com.google.devtools.build.lib.exec.ExecutionOptions;
-import com.google.devtools.build.lib.runtime.BlazeRuntime;
+import com.google.devtools.build.lib.runtime.CommandEnvironment;
 import com.google.devtools.build.lib.util.OS;
 
 import java.util.concurrent.ExecutorService;
@@ -33,7 +33,7 @@ public class SandboxActionContextProvider extends ActionContextProvider {
   private final ImmutableList<ActionContext> strategies;
 
   public SandboxActionContextProvider(
-      BlazeRuntime runtime, BuildRequest buildRequest, ExecutorService backgroundWorkers) {
+      CommandEnvironment env, BuildRequest buildRequest, ExecutorService backgroundWorkers) {
     boolean verboseFailures = buildRequest.getOptions(ExecutionOptions.class).verboseFailures;
     boolean sandboxDebug = buildRequest.getOptions(SandboxOptions.class).sandboxDebug;
     Builder<ActionContext> strategies = ImmutableList.builder();
@@ -41,8 +41,8 @@ public class SandboxActionContextProvider extends ActionContextProvider {
     if (OS.getCurrent() == OS.LINUX) {
       strategies.add(
           new LinuxSandboxedStrategy(
-              runtime.getClientEnv(),
-              runtime.getDirectories(),
+              env.getClientEnv(),
+              env.getDirectories(),
               backgroundWorkers,
               verboseFailures,
               sandboxDebug));

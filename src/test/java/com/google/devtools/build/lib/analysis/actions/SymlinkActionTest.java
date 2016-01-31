@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,7 +13,12 @@
 // limitations under the License.
 package com.google.devtools.build.lib.analysis.actions;
 
+import static com.google.common.truth.Truth.assertThat;
 import static com.google.devtools.build.lib.actions.util.ActionsTestUtil.NULL_ACTION_OWNER;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import com.google.common.collect.Sets;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
@@ -22,13 +27,18 @@ import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Executor;
 import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
 import com.google.devtools.build.lib.exec.util.TestExecutorBuilder;
-import com.google.devtools.build.lib.testutil.MoreAsserts;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
+
+import org.junit.Before;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.JUnit4;
 
 /**
  * Tests {@link SymlinkAction}.
  */
+@RunWith(JUnit4.class)
 public class SymlinkActionTest extends BuildViewTestCase {
 
   private Path input;
@@ -37,9 +47,8 @@ public class SymlinkActionTest extends BuildViewTestCase {
   private Artifact outputArtifact;
   private SymlinkAction action;
 
-  @Override
-  public void setUp() throws Exception {
-    super.setUp();
+  @Before
+  public final void setUp() throws Exception  {
     input = scratch.file("input.txt", "Hello, world.");
     inputArtifact = getSourceArtifact("input.txt");
     Path linkedInput = directories.getExecRoot().getRelative("input.txt");
@@ -52,16 +61,19 @@ public class SymlinkActionTest extends BuildViewTestCase {
         inputArtifact, outputArtifact, "Symlinking test");
   }
 
+  @Test
   public void testInputArtifactIsInput() {
     Iterable<Artifact> inputs = action.getInputs();
     assertEquals(Sets.newHashSet(inputArtifact), Sets.newHashSet(inputs));
   }
 
+  @Test
   public void testDestinationArtifactIsOutput() {
     Iterable<Artifact> outputs = action.getOutputs();
     assertEquals(Sets.newHashSet(outputArtifact), Sets.newHashSet(outputs));
   }
 
+  @Test
   public void testSymlink() throws Exception {
     Executor executor = new TestExecutorBuilder(directories, null).build();
     action.execute(new ActionExecutionContext(executor, null, null, null, null));
@@ -71,6 +83,7 @@ public class SymlinkActionTest extends BuildViewTestCase {
     assertEquals(outputArtifact, action.getPrimaryOutput());
   }
 
+  @Test
   public void testExecutableSymlink() throws Exception {
     Executor executor = new TestExecutorBuilder(directories, null).build();
     outputArtifact = getBinArtifactWithNoOwner("destination2.txt");
@@ -83,7 +96,7 @@ public class SymlinkActionTest extends BuildViewTestCase {
       action.execute(actionExecutionContext);
       fail("Expected ActionExecutionException");
     } catch (ActionExecutionException e) {
-      MoreAsserts.assertContainsRegex("'input.txt' is not executable", e.getMessage());
+      assertThat(e.getMessage()).containsMatch("'input.txt' is not executable");
     }
     input.setExecutable(true);
     action.execute(actionExecutionContext);

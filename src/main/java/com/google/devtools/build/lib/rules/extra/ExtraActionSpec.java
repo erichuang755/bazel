@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,9 +24,9 @@ import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.TransitiveInfoProvider;
 import com.google.devtools.build.lib.analysis.actions.CommandLine;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
-import com.google.devtools.build.lib.syntax.Label;
 import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.vfs.PathFragment;
 
@@ -116,7 +116,7 @@ public final class ExtraActionSpec implements TransitiveInfoProvider {
     // See {@link #createExpandedCommand} for list of supported variables.
     String command = createExpandedCommand(owningRule, actionToShadow, extraActionInfoFile);
 
-    Map<String, String> env = owningRule.getConfiguration().getDefaultShellEnvironment();
+    Map<String, String> env = owningRule.getConfiguration().getLocalShellEnvironment();
 
     CommandHelper commandHelper =
         new CommandHelper(
@@ -133,7 +133,6 @@ public final class ExtraActionSpec implements TransitiveInfoProvider {
 
     String commandMessage = String.format("Executing extra_action %s on %s", label, ownerLabel);
     owningRule.registerAction(new ExtraAction(
-        actionToShadow.getOwner(),
         ImmutableSet.copyOf(extraActionInputs.build()),
         manifests,
         extraActionOutputs,

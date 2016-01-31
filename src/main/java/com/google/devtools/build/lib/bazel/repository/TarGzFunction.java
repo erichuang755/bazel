@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,17 +14,13 @@
 
 package com.google.devtools.build.lib.bazel.repository;
 
-import com.google.devtools.build.lib.bazel.repository.DecompressorValue.DecompressorDescriptor;
-import com.google.devtools.build.lib.bazel.repository.RepositoryFunction.RepositoryFunctionException;
+import com.google.common.base.Optional;
+import com.google.devtools.build.lib.bazel.repository.DecompressorValue.Decompressor;
+import com.google.devtools.build.lib.rules.repository.RepositoryFunction.RepositoryFunctionException;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
-import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyFunctionException.Transience;
-import com.google.devtools.build.skyframe.SkyFunctionName;
-
-import com.google.devtools.build.skyframe.SkyKey;
-import com.google.devtools.build.skyframe.SkyValue;
 
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
@@ -35,26 +31,32 @@ import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.util.zip.GZIPInputStream;
 
-import javax.annotation.Nullable;
-
 /**
  * Creates a  repository by unarchiving a .tar.gz file.
  */
-public class TarGzFunction implements SkyFunction {
+public class TarGzFunction implements Decompressor {
+  public static final Decompressor INSTANCE = new TarGzFunction();
 
-  public static final SkyFunctionName NAME = SkyFunctionName.create("TAR_GZ_FUNCTION");
+  private TarGzFunction() {
+  }
 
-  @Nullable
   @Override
-  public SkyValue compute(SkyKey skyKey, Environment env) throws RepositoryFunctionException {
-    DecompressorDescriptor descriptor = (DecompressorDescriptor) skyKey.argument();
+  public Path decompress(DecompressorDescriptor descriptor) throws RepositoryFunctionException {
+    Optional<String> prefix = descriptor.prefix();
+    boolean foundPrefix = false;
 
     try (GZIPInputStream gzipStream = new GZIPInputStream(
         new FileInputStream(descriptor.archivePath().getPathFile()))) {
       TarArchiveInputStream tarStream = new TarArchiveInputStream(gzipStream);
       TarArchiveEntry entry;
       while ((entry = tarStream.getNextTarEntry()) != null) {
-        Path filename = descriptor.repositoryPath().getRelative(entry.getName());
+        StripPrefixedPath entryPath = StripPrefixedPath.maybeDeprefix(entry.getName(), prefix);
+        foundPrefix = foundPrefix || entryPath.foundPrefix();
+        if (entryPath.skip()) {
+          continue;
+        }
+
+        Path filename = descriptor.repositoryPath().getRelative(entryPath.getPathFragment());
         FileSystemUtils.createDirectoryAndParents(filename.getParentDirectory());
         if (entry.isDirectory()) {
           FileSystemUtils.createDirectoryAndParents(filename);
@@ -76,13 +78,13 @@ public class TarGzFunction implements SkyFunction {
     } catch (IOException e) {
       throw new RepositoryFunctionException(e, Transience.TRANSIENT);
     }
-    return new DecompressorValue(descriptor.repositoryPath());
-  }
 
-  @Nullable
-  @Override
-  public String extractTag(SkyKey skyKey) {
-    return null;
-  }
+    if (prefix.isPresent() && !foundPrefix) {
+      throw new RepositoryFunctionException(
+          new IOException("Prefix " + prefix.get() + " was given, but not found in the archive"),
+          Transience.PERSISTENT);
+    }
 
+    return descriptor.repositoryPath();
+  }
 }

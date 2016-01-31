@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,9 +20,10 @@ import static com.google.devtools.build.lib.rules.objc.ObjcRuleClasses.PLIST_TYP
 import com.google.devtools.build.lib.analysis.BaseRuleClasses;
 import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
+import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.packages.RuleClass.Builder;
-import com.google.devtools.build.lib.packages.Type;
+import com.google.devtools.build.lib.syntax.Type;
 
 /**
  * Rule definition for {@code objc_options}.
@@ -41,9 +42,9 @@ public class ObjcOptionsRule implements RuleDefinition {
         infoplist files to merge with the final binary's infoplist. This
         corresponds to a single file <i>appname</i>-Info.plist in Xcode
         projects.
-        <i>(List of <a href="build-ref.html#labels">labels</a>; optional)</i>
+        <i>(List of <a href="../build-ref.html#labels">labels</a>; optional)</i>
         <!-- #END_BLAZE_RULE.ATTRIBUTE -->*/
-        .add(attr("infoplists", Type.LABEL_LIST)
+        .add(attr("infoplists", BuildType.LABEL_LIST)
             .allowedFileTypes(PLIST_TYPE))
         .build();
   }
@@ -60,11 +61,7 @@ public class ObjcOptionsRule implements RuleDefinition {
 
 /*<!-- #BLAZE_RULE (NAME = objc_options, TYPE = OTHER, FAMILY = Objective-C) -->
 
-${ATTRIBUTE_SIGNATURE}
-
 <p>This rule provides a nameable set of build settings to use when building
 Objective-C targets.</p>
-
-${ATTRIBUTE_DEFINITION}
 
 <!-- #END_BLAZE_RULE -->*/

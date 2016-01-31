@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,15 +17,14 @@ import static com.google.common.truth.Truth.assertThat;
 import static org.junit.Assert.assertEquals;
 import static org.mockito.Mockito.when;
 
-import com.google.common.base.Preconditions;
 import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.common.eventbus.EventBus;
-import com.google.devtools.build.lib.events.EventCollector;
 import com.google.devtools.build.lib.events.EventKind;
-import com.google.devtools.build.lib.events.Reporter;
+import com.google.devtools.build.lib.events.util.EventCollectionApparatus;
 import com.google.devtools.build.lib.util.Clock;
+import com.google.devtools.build.lib.util.Preconditions;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -66,7 +65,7 @@ public class ActionExecutionStatusReporterTest {
     }
   }
 
-  private EventCollector collector;
+  private EventCollectionApparatus events;
   private ActionExecutionStatusReporter statusReporter;
   private EventBus eventBus;
   private MockClock clock = new MockClock();
@@ -84,34 +83,33 @@ public class ActionExecutionStatusReporterTest {
   }
 
   @Before
-  public void setUp() throws Exception {
-    collector = new EventCollector(EventKind.ALL_EVENTS);
-    Reporter reporter = new Reporter();
-    reporter.addHandler(collector);
-    statusReporter = ActionExecutionStatusReporter.create(reporter, clock);
+  public final void initializeEventBus() throws Exception  {
+    events = new EventCollectionApparatus(EventKind.ALL_EVENTS);
+    statusReporter = ActionExecutionStatusReporter.create(events.reporter(), clock);
     eventBus = new EventBus();
     eventBus.register(statusReporter);
   }
 
   private void verifyNoOutput() {
-    collector.clear();
+    events.clear();
     statusReporter.showCurrentlyExecutingActions("");
-    assertEquals(0, collector.count());
+    assertThat(events.collector()).isEmpty();
   }
 
   private void verifyOutput(String... lines) throws Exception {
-    collector.clear();
+    events.clear();
     statusReporter.showCurrentlyExecutingActions("");
     assertThat(Splitter.on('\n').omitEmptyStrings().trimResults().split(
-        Iterables.getOnlyElement(collector).getMessage().replaceAll(" +", " ")))
+        Iterables.getOnlyElement(events.collector()).getMessage().replaceAll(" +", " ")))
         .containsExactlyElementsIn(Arrays.asList(lines)).inOrder();
   }
 
   private void verifyWarningOutput(String... lines) throws Exception {
-    collector.clear();
+    events.setFailFast(false);
+    events.clear();
     statusReporter.warnAboutCurrentlyExecutingActions();
     assertThat(Splitter.on('\n').omitEmptyStrings().trimResults().split(
-        Iterables.getOnlyElement(collector).getMessage().replaceAll(" +", " ")))
+        Iterables.getOnlyElement(events.collector()).getMessage().replaceAll(" +", " ")))
         .containsExactlyElementsIn(Arrays.asList(lines)).inOrder();
   }
 

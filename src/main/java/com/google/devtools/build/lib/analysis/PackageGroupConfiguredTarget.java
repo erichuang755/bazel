@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,14 +14,14 @@
 
 package com.google.devtools.build.lib.analysis;
 
-import com.google.common.base.Preconditions;
 import com.google.common.collect.UnmodifiableIterator;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.packages.PackageGroup;
 import com.google.devtools.build.lib.packages.PackageSpecification;
-import com.google.devtools.build.lib.syntax.Label;
+import com.google.devtools.build.lib.util.Preconditions;
 
 /**
  * Dummy ConfiguredTarget for package groups. Contains no functionality, since
@@ -73,6 +73,6 @@ public final class PackageGroupConfiguredTarget extends AbstractConfiguredTarget
 
   @Override
   public UnmodifiableIterator<TransitiveInfoProvider> iterator() {
-    throw new IllegalStateException();
+    throw new UnsupportedOperationException();
   }
 }

@@ -6,7 +6,7 @@ exports_files(["LICENSE"])
 
 sh_test(
     name = "ijar_test",
-    size = "large",
+    size = "enormous",
     srcs = ["ijar_test.sh"],
     args = [
         "$(JAVAC)",
@@ -18,6 +18,7 @@ sh_test(
         # We assume unzip and zip to be on the path
         "unzip",
         "zip",
+        "$(location :zip_count)",
     ],
     data = [
         "testenv.sh",
@@ -29,6 +30,12 @@ sh_test(
         "WellCompressed1.java",
         "WellCompressed2.java",
         ":libtypeannotations2.jar",
+        ":libmethodparameters.jar",
+        ":source_debug_extension.jar",
+        ":largest_regular.jar",
+        ":smallest_zip64.jar",
+        ":definitely_zip64.jar",
+        ":zip_count",
         "TypeAnnotationTest2.java",
         # invokedynamic/ClassWithLambda.java, compiled with javac8
         ":libinvokedynamic.jar",
@@ -100,6 +107,27 @@ java_library(
     tags = ["jdk8"],
 )
 
+java_library(
+    name = "methodparameters",
+    srcs = ["methodparameters/Test.java"],
+    javacopts = ["-source 8 -target 8 -parameters"],
+)
+
+java_binary(
+    name = "gen_source_debug_extension",
+    srcs = ["GenSourceDebugExtension.java"],
+    main_class = "test.GenSourceDebugExtension",
+    deps = ["//third_party:asm"],
+)
+
+genrule(
+    name = "gen_source_debug_extension_jar",
+    srcs = [],
+    outs = ["source_debug_extension.jar"],
+    cmd = "$(location :gen_source_debug_extension) $@",
+    tools = ["gen_source_debug_extension"],
+)
+
 java_test(
     name = "IjarTests",
     size = "small",
@@ -107,7 +135,6 @@ java_test(
         "IjarTests.java",
         "StripVerifyingVisitor.java",
     ],
-    args = ["IjarTests"],
     data = [
         "PrivateNestedClass.java",
         "UseDeprecatedParts.java",
@@ -116,6 +143,7 @@ java_test(
         ":interface_ijar_testlib",
     ],
     tags = ["zip"],
+    test_class = "IjarTests",
     deps = [
         "//src/java_tools/buildjar:BazelJavaCompiler",
         "//third_party:asm",
@@ -127,4 +155,33 @@ test_suite(
     name = "all_tests",
     testonly = 1,
     visibility = ["//visibility:public"],
+)
+
+java_binary(
+    name = "gen_zip_with_entries",
+    srcs = ["GenZipWithEntries.java"],
+    jvm_flags = ["-Djdk.util.zip.inhibitZip64=false"],
+    main_class = "test.GenZipWithEntries",
+    deps = ["//third_party:asm"],
+)
+
+[
+    genrule(
+        name = name,
+        outs = [name + ".jar"],
+        cmd = "$(location :gen_zip_with_entries) %s $@" % entries,
+        tools = [":gen_zip_with_entries"],
+    )
+    for name, entries in [
+        ("largest_regular", 65535),
+        ("smallest_zip64", 65536),
+        ("definitely_zip64", 70000),
+    ]
+]
+
+java_binary(
+    name = "zip_count",
+    srcs = ["ZipCount.java"],
+    jvm_flags = ["-Djdk.util.zip.inhibitZip64=false"],
+    main_class = "test.ZipCount",
 )

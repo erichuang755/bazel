@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Copyright 2015 Google Inc. All rights reserved.
+# Copyright 2015 The Bazel Authors. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -44,7 +44,7 @@ EOF
 filegroup(name="mfg", srcs=["//external:e"])
 EOF
 
-  bazel build //:mfg
+  bazel build //:mfg &> $TEST_log || fail "Building //:mfg failed"
 }
 
 # Uses a glob from a different repository for a runfile.
@@ -171,7 +171,7 @@ EOF
 }
 
 function test_non_existent_external_ref() {
-  mkdir zoo
+  mkdir -p zoo
   touch zoo/BallPit.java
   cat > zoo/BUILD <<EOF
 java_binary(
@@ -259,14 +259,11 @@ public class Mongoose {
 }
 EOF
 
-  # Check that rebuilding this doesn't rebuild libmongoose.jar, even though it
-  # has changed. Bazel assumes that files in external repositories are
-  # immutable.
+  # Check that external repo changes are noticed and libmongoose.jar is rebuilt.
   bazel fetch //zoo:ball-pit || fail "Fetch failed"
   bazel run //zoo:ball-pit >& $TEST_log || fail "Failed to build/run zoo"
-  expect_log "Tra-la!"
-  expect_not_log "Building endangered/libmongoose.jar"
-  expect_not_log "Growl!"
+  expect_not_log "Tra-la!"
+  expect_log "Growl!"
 }
 
 function test_default_ws() {
@@ -311,12 +308,12 @@ EOF
 cc_binary(
     name = "greeter",
     srcs = ["greeter.cc"],
-    deps = ["@greet-ws//:greet_lib"],
+    deps = ["@greet_ws//:greet_lib"],
 )
 EOF
   cat > WORKSPACE <<EOF
 local_repository(
-    name = "greet-ws",
+    name = "greet_ws",
     path = "$external_ws",
 )
 EOF
@@ -329,7 +326,7 @@ EOF
 # Creates an indirect dependency on X from A and make sure the error message
 # refers to the correct label.
 function test_indirect_dep_message() {
-  local external_dir=$TEST_TMPDIR
+  local external_dir=$TEST_TMPDIR/ext-dir
   mkdir -p a b $external_dir/x
   cat > a/A.java <<EOF
 package a;
@@ -365,7 +362,7 @@ EOF
 java_library(
     name = "b",
     srcs = ["B.java"],
-    deps = ["@x-repo//x"],
+    deps = ["@x_repo//x"],
     visibility = ["//visibility:public"],
 )
 EOF
@@ -390,15 +387,14 @@ EOF
 
   cat > WORKSPACE <<EOF
 local_repository(
-    name = "x-repo",
+    name = "x_repo",
     path = "$external_dir",
 )
 EOF
 
-  bazel fetch //a:a || fail "Fetch failed"
   bazel build //a:a >& $TEST_log && fail "Building //a:a should error out"
   expect_log "** Please add the following dependencies:"
-  expect_log "@x-repo//x  to //a:a"
+  expect_log "@x_repo//x  to //a:a"
 }
 
 function test_external_includes() {
@@ -425,7 +421,7 @@ EOF
 
   cat > WORKSPACE <<EOF
 local_repository(
-    name = "clib-repo",
+    name = "clib_repo",
     path = "$clib",
 )
 EOF
@@ -433,7 +429,7 @@ EOF
 cc_binary(
     name = "printer",
     srcs = ["printer.cc"],
-    deps = ["@clib-repo//:clib"],
+    deps = ["@clib_repo//:clib"],
 )
 EOF
   cat > printer.cc <<EOF
@@ -448,6 +444,8 @@ int main() {
 EOF
 
   bazel fetch //:printer || fail "Fetch failed"
+  bazel build @clib_repo//:clib >& $TEST_log \
+    || fail "Building @clib_repo//:clib failed"
   bazel run //:printer >& $TEST_log || fail "Running //:printer failed"
   expect_log "My number is 3"
 }
@@ -458,13 +456,13 @@ function test_external_query() {
   touch $external_dir/WORKSPACE
   cat > WORKSPACE <<EOF
 local_repository(
-    name = "my-repo",
+    name = "my_repo",
     path = "$external_dir",
 )
 EOF
-  bazel fetch //external:my-repo || fail "Fetch failed"
-  bazel query 'deps(//external:my-repo)' >& $TEST_log || fail "query failed"
-  expect_log "//external:my-repo"
+  bazel fetch //external:my_repo || fail "Fetch failed"
+  bazel query 'deps(//external:my_repo)' >& $TEST_log || fail "query failed"
+  expect_log "//external:my_repo"
 }
 
 function test_overlaid_build_file() {
@@ -487,24 +485,24 @@ EOF
 genrule(
     name = "turtle",
     outs = ["tmnt"],
-    cmd = "echo 'Raphael' > \$@",
+    cmd = "echo 'Leonardo' > \$@",
     visibility = ["//visibility:public"],
 )
 EOF
   bazel fetch //external:best-turtle || fail "Fetch failed"
   bazel build //external:best-turtle &> $TEST_log || fail "First build failed"
-  assert_contains "Raphael" bazel-genfiles/external/mutant/tmnt
+  assert_contains "Leonardo" bazel-genfiles/external/mutant/tmnt
 
   cat > mutant.BUILD <<EOF
 genrule(
     name = "turtle",
     outs = ["tmnt"],
-    cmd = "echo 'Michaelangelo' > \$@",
+    cmd = "echo 'Donatello' > \$@",
     visibility = ["//visibility:public"],
 )
 EOF
   bazel build //external:best-turtle &> $TEST_log || fail "Second build failed"
-  assert_contains "Michaelangelo" bazel-genfiles/external/mutant/tmnt
+  assert_contains "Donatello" bazel-genfiles/external/mutant/tmnt
 }
 
 function test_external_deps_in_remote_repo() {
@@ -605,35 +603,6 @@ EOF
   bazel build @r//:fg || fail "build failed"
 }
 
-function test_include_from_local_repository() {
-  local r=$TEST_TMPDIR/r
-  rm -fr $r
-  mkdir $r
-  touch $r/WORKSPACE
-  mkdir -p $r/b
-  cat > $r/b/BUILD <<EOF
-exports_files(["include"])
-EOF
-
-  cat > $r/b/include <<EOF
-filegroup(name = "foo")
-EOF
-
-  cat > WORKSPACE <<EOF
-local_repository(
-    name = "r",
-    path = "$r",
-)
-EOF
-
-  mkdir -p a
-  cat > a/BUILD <<EOF
-include("@r//b:include")
-EOF
-
-  bazel query '//a:foo' || fail "query failed"
-}
-
 function test_cc_binary_in_local_repository() {
   local r=$TEST_TMPDIR/r
   rm -fr $r
@@ -645,6 +614,9 @@ cc_binary(
     srcs = ["bin.cc"],
 )
 EOF
+  cat > $r/bin.cc <<EOF
+int main() { return 0; };
+EOF
 
   cat > WORKSPACE <<EOF
 local_repository(
@@ -653,7 +625,7 @@ local_repository(
 )
 EOF
 
-  bazel build --nobuild @r//:bin || fail "build failed"
+  bazel build @r//:bin || fail "build failed"
 }
 
 function test_output_file_in_local_repository() {
@@ -851,6 +823,214 @@ EOF
 
   bazel run @r//bin:bin >& $TEST_log || fail "build failed"
   expect_log "Hello User"
+}
+
+function test_package_wildcard_in_remote_repository() {
+  local r=$TEST_TMPDIR/r
+  rm -fr $r
+  mkdir -p $r/a
+  touch $r/{x,y,a/g,a/h}
+  cat > $r/BUILD <<EOF
+exports_files(["x", "y"])
+EOF
+
+  cat > $r/a/BUILD <<EOF
+exports_files(["g", "h"])
+EOF
+
+  cat > WORKSPACE <<EOF
+local_repository(name="r", path="$r")
+EOF
+
+  bazel query @r//:all-targets + @r//a:all-targets >& $TEST_log || fail "query failed"
+  expect_log "@r//:x"
+  expect_log "@r//:y"
+  expect_log "@r//a:g"
+  expect_log "@r//a:h"
+}
+
+function test_recursive_wildcard_in_remote_repository() {
+  local r=$TEST_TMPDIR/r
+  rm -fr $r
+  mkdir -p $r/a/{x,y/z}
+  touch $r/a/{x,y/z}/{m,n}
+
+  echo 'exports_files(["m", "n"])' > $r/a/x/BUILD
+  echo 'exports_files(["m", "n"])' > $r/a/y/z/BUILD
+
+  echo "local_repository(name='r', path='$r')" > WORKSPACE
+  bazel query @r//...:all-targets >& $TEST_log || fail "query failed"
+  expect_log "@r//a/x:m"
+  expect_log "@r//a/x:n"
+  expect_log "@r//a/y/z:m"
+  expect_log "@r//a/y/z:n"
+
+  bazel query @r//a/x:all-targets >& $TEST_log || fail "query failed"
+  expect_log "@r//a/x:m"
+  expect_log "@r//a/x:n"
+  expect_not_log "@r//a/y/z:m"
+  expect_not_log "@r//a/y/z:n"
+}
+
+function test_package_name_constants() {
+  local r=$TEST_TMPDIR/r
+  rm -fr $r
+  mkdir -p $r/a
+  cat > $r/a/BUILD <<'EOF'
+genrule(
+  name = 'b',
+  srcs = [],
+  outs = ['bo'],
+  cmd = 'echo ' + REPOSITORY_NAME + ' ' + PACKAGE_NAME + ' > $@')
+EOF
+
+  cat > WORKSPACE <<EOF
+local_repository(name='r', path='$r')
+EOF
+
+  bazel build @r//a:b || fail "build failed"
+  cat bazel-genfiles/external/r/a/bo > $TEST_log
+  expect_log "@r a"
+}
+
+function test_slash_in_repo_name() {
+  local r=$TEST_TMPDIR/r
+  rm -fr $r
+  mkdir -p $r/a
+
+  touch $r/a/WORKSPACE
+  cat > $r/a/BUILD <<EOF
+cc_binary(
+    name = "bin",
+    srcs = ["bin.cc"],
+)
+EOF
+  cat > $r/a/bin.cc <<EOF
+int main() { return 0; };
+EOF
+
+  cat > WORKSPACE <<EOF
+local_repository(
+    name = "r/a",
+    path = "$r/a",
+)
+EOF
+
+  bazel build @r/a//:bin &> $TEST_log && fail "expected build failure, but succeeded"
+  expect_log "workspace names may contain only A-Z, a-z, 0-9, '-', '_' and '.'"
+}
+
+function test_remote_includes() {
+  local remote=$TEST_TMPDIR/r
+  rm -fr $remote
+  mkdir -p $remote/inc
+
+  touch $remote/WORKSPACE
+  cat > $remote/BUILD <<EOF
+cc_library(
+    name = "bar",
+    srcs = ["bar.cc"],
+    hdrs = ["inc/bar.h"],
+    visibility = ["//visibility:public"],
+)
+EOF
+  cat > $remote/bar.cc <<EOF
+#include "inc/bar.h"
+int getNum() {
+  return 42;
+}
+EOF
+  cat > $remote/inc/bar.h <<EOF
+int getNum();
+EOF
+
+  cat > WORKSPACE <<EOF
+local_repository(
+    name = "r",
+    path = "$remote",
+)
+EOF
+cat > BUILD <<EOF
+cc_binary(
+    name = "foo",
+    srcs = ["foo.cc"],
+    deps = ["@r//:bar"],
+)
+EOF
+  cat > foo.cc <<EOF
+#include <stdio.h>
+#include "inc/bar.h"
+int main() { printf("%d\n", getNum()); return 0; };
+EOF
+
+  bazel run :foo &> $TEST_log || fail "build failed"
+  expect_log "42"
+}
+
+function test_change_new_repository_build_file() {
+  local r=$TEST_TMPDIR/r
+  rm -fr $r
+  mkdir -p $r
+  cat > $r/a.cc <<EOF
+int a() { return 42; }
+EOF
+
+  cat > $r/b.cc <<EOF
+int b() { return 42; }
+EOF
+
+  cat > WORKSPACE <<EOF
+new_local_repository(
+    name="r",
+    path="$r",
+    build_file="BUILD.r"
+)
+EOF
+
+  cat > BUILD.r <<EOF
+cc_library(name = "a", srcs = ["a.cc"])
+EOF
+
+  bazel build @r//:a || fail "build failed"
+
+  cat > BUILD.r <<EOF
+cc_library(name = "a", srcs = ["a.cc", "b.cc"])
+EOF
+
+  bazel build @r//:a || fail "build failed"
+}
+
+# Regression test for https://github.com/bazelbuild/bazel/issues/792
+function test_build_all() {
+  local r=$TEST_TMPDIR/r
+  mkdir -p $r
+  touch $r/WORKSPACE
+  cat > $r/BUILD <<'EOF'
+genrule(
+  name = "dummy1",
+  outs = ["dummy.txt"],
+  cmd = "echo 1 >$@",
+  visibility = ["//visibility:public"],
+)
+EOF
+
+  cat > WORKSPACE <<EOF
+local_repository(
+    name="r",
+    path="$r",
+)
+EOF
+
+  cat > BUILD <<'EOF'
+genrule(
+  name = "dummy2",
+  srcs = ["@r//:dummy1"],
+  outs = ["dummy.txt"],
+  cmd = "cat $(SRCS) > $@",
+)
+EOF
+
+  bazel build :* || fail "build failed"
 }
 
 run_suite "local repository tests"

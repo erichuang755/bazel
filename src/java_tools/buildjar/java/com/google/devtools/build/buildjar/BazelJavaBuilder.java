@@ -1,4 +1,4 @@
-// Copyright 2007-2014 Google Inc. All rights reserved.
+// Copyright 2007 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,12 +14,13 @@
 
 package com.google.devtools.build.buildjar;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.buildjar.javac.JavacOptions;
 import com.google.devtools.build.buildjar.javac.plugins.BlazeJavaCompilerPlugin;
+import com.google.devtools.build.buildjar.javac.plugins.classloader.ClassLoaderMaskingPlugin;
 import com.google.devtools.build.buildjar.javac.plugins.dependency.DependencyModule;
 import com.google.devtools.build.buildjar.javac.plugins.errorprone.ErrorPronePlugin;
-import com.google.devtools.build.buildjar.javac.plugins.filemanager.FileManagerInitializationPlugin;
 import com.google.devtools.build.lib.worker.WorkerProtocol.WorkRequest;
 import com.google.devtools.build.lib.worker.WorkerProtocol.WorkResponse;
 
@@ -84,14 +85,8 @@ public abstract class BazelJavaBuilder {
       } catch (IOException e) {
         e.printStackTrace();
         return 1;
-      } finally {
-        // JavaBuilder doesn't close certain file handles. We have to migrate to using the real
-        // Jsr199 API instead of just calling the Main method of Javac in order to fix this, for
-        // now let's just invoke GC.
-        System.gc();
       }
     }
-
     return 0;
   }
 
@@ -120,11 +115,12 @@ public abstract class BazelJavaBuilder {
    *         file failed
    * @throws InvalidCommandLineException on any command line error
    */
-  private static JavaLibraryBuildRequest parse(List<String> args) throws IOException,
+  @VisibleForTesting
+  public static JavaLibraryBuildRequest parse(List<String> args) throws IOException,
       InvalidCommandLineException {
     ImmutableList<BlazeJavaCompilerPlugin> plugins =
         ImmutableList.<BlazeJavaCompilerPlugin>of(
-            new FileManagerInitializationPlugin(),
+            new ClassLoaderMaskingPlugin(),
             new ErrorPronePlugin());
     JavaLibraryBuildRequest build =
         new JavaLibraryBuildRequest(args, plugins, new DependencyModule.Builder());

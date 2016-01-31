@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <errno.h>  // errno, ENAMETOOLONG
 #include <limits.h>
 #include <pwd.h>
+#include <signal.h>
 #include <string.h>  // strerror
 #include <sys/mount.h>
 #include <sys/param.h>
@@ -23,8 +25,7 @@
 #include <sys/types.h>
 #include <sys/un.h>
 #include <unistd.h>
-#include <signal.h>
-#include <libprocstat.h>
+#include <libprocstat.h>  // must be included after <sys/...> headers
 
 #include "src/main/cpp/blaze_util.h"
 #include "src/main/cpp/blaze_util_platform.h"

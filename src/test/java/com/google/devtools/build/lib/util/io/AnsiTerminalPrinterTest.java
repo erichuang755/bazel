@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -36,7 +36,7 @@ public class AnsiTerminalPrinterTest {
   private AnsiTerminalPrinter printer;
 
   @Before
-  public void setUp() throws Exception {
+  public final void createPrinter() throws Exception  {
     stream = new ByteArrayOutputStream(1000);
     printer = new AnsiTerminalPrinter(stream, true);
   }

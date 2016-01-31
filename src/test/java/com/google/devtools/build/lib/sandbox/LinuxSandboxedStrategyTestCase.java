@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 package com.google.devtools.build.lib.sandbox;
+
+import static com.google.common.truth.Truth.assertThat;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -49,7 +51,6 @@ public class LinuxSandboxedStrategyTestCase {
   protected FileSystem fileSystem;
   protected Path workspaceDir;
   protected Path fakeSandboxDir;
-  protected Path fakeSandboxExecRoot;
 
   protected BlazeExecutor executor;
   protected BlazeDirectories blazeDirs;
@@ -65,7 +66,7 @@ public class LinuxSandboxedStrategyTestCase {
   }
 
   @Before
-  public void setUp() throws Exception {
+  public final void createDirectoriesAndExecutor() throws Exception  {
     Path testRoot = createTestRoot();
 
     workspaceDir = testRoot.getRelative("workspace");
@@ -82,7 +83,7 @@ public class LinuxSandboxedStrategyTestCase {
 
     OptionsParser optionsParser =
         OptionsParser.newOptionsParser(ExecutionOptions.class, SandboxOptions.class);
-    optionsParser.parse("--verbose_failures");
+    optionsParser.parse("--verbose_failures", "--sandbox_debug");
 
     EventBus bus = new EventBus();
 
@@ -106,6 +107,12 @@ public class LinuxSandboxedStrategyTestCase {
                     true,
                     false)),
             ImmutableList.<ActionContextProvider>of());
+  }
+
+  protected LinuxSandboxedStrategy getLinuxSandboxedStrategy() {
+    SpawnActionContext spawnActionContext = executor.getSpawnActionContext("");
+    assertThat(spawnActionContext).isInstanceOf(LinuxSandboxedStrategy.class);
+    return (LinuxSandboxedStrategy) spawnActionContext;
   }
 
   private Path createTestRoot() throws IOException {

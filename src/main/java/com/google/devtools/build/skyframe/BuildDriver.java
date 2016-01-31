@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,6 +15,8 @@
 package com.google.devtools.build.skyframe;
 
 import com.google.devtools.build.lib.events.EventHandler;
+import com.google.devtools.build.lib.util.AbruptExitException;
+import com.google.devtools.common.options.OptionsClassProvider;
 
 import javax.annotation.Nullable;
 
@@ -34,7 +36,9 @@ public interface BuildDriver {
    * Retrieve metadata about the computation over the given roots. Data returned is specific to the
    * underlying evaluator implementation.
    */
-  String meta(Iterable<SkyKey> roots);
+  String meta(Iterable<SkyKey> roots, OptionsClassProvider options)
+      throws AbruptExitException, InterruptedException;
+
 
   MemoizingEvaluator getGraphForTesting();
 

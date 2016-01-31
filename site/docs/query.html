@@ -1,141 +1,7 @@
-<!DOCTYPE html>
-
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>Bazel Query Reference</title>
-
-  <style type="text/css">
-
-    body {
-      background-color: #ffffff;
-      color: black;
-      margin-right: 10%;
-      margin-left: 10%;
-    }
-
-    h1, h2, h3, h4, h5, h6 {
-      color: #dd7755;
-      font-family: sans-serif;
-    }
-    @media print {
-      /* Darker version for printing */
-      h1, h2, h3, h4, h5, h6 {
-        color: #008000;
-        font-family: helvetica, sans-serif;
-      }
-    }
-
-    h1 {
-      text-align: center;
-    }
-    h2 {
-      margin-left: -0.5in;
-    }
-    h3 {
-      margin-left: -0.25in;
-    }
-    h4 {
-      margin-left: -0.125in;
-    }
-    hr {
-      margin-left: -1in;
-    }
-    address {
-      text-align: right;
-    }
-
-    /* A compact unordered list */
-    ul.tight > li {
-      margin-bottom: 0;
-    }
-
-    /* Use the <code> tag for bits of code and <var> for variable and object names. */
-    code,pre,samp,var {
-      color: #006000;
-    }
-    /* Use the <file> tag for file and directory paths and names. */
-    file {
-      color: #905050;
-      font-family: monospace;
-    }
-    /* Use the <kbd> tag for stuff the user should type. */
-    kbd {
-      color: #600000;
-    }
-    div.note p {
-      float: right;
-      width: 3in;
-      margin-right: 0%;
-      padding: 1px;
-      border: 2px solid #60a060;
-      background-color: #fffff0;
-    }
-
-    table.grid {
-      background-color: #ffffee;
-      border: 1px solid black;
-      border-collapse: collapse;
-      margin-left: 2mm;
-      margin-right: 2mm;
-    }
-
-    table.grid th,
-    table.grid td {
-      border: 1px solid black;
-      padding: 0 2mm 0 2mm;
-    }
-
-    /* Use pre.code for code listings.
-       Use pre.interaction for "Here's what you see when you run a.out.".
-       (Within pre.interaction, use <kbd> things the user types)
-     */
-    pre.code {
-      background-color: #FFFFEE;
-      border: 1px solid black;
-      color: #004000;
-      font-size: 10pt;
-      margin-left: 2mm;
-      margin-right: 2mm;
-      padding: 2mm;
-      -moz-border-radius: 12px 0px 0px 0px;
-    }
-
-    pre.interaction {
-      background-color: #EEFFEE;
-      color: #004000;
-      padding: 2mm;
-    }
-
-    pre.interaction kbd {
-      font-weight: bold;
-      color: #000000;
-    }
-
-    /* legacy style */
-    pre.interaction b.astyped {
-      color: #000000;
-    }
-
-    pre  {
-      margin-left: 5em;
-      color: #008000;
-    }
-    .tt td {
-      font-family: courier;
-    }
-
-    .deprecated { text-decoration: line-through; }
-    .discouraged { text-decoration: line-through; }
-
-    table.layout { width: 980px; }
-    table.layout td { vertical-align: top; }
-
-    #maintainer { text-align: right; }
-  </style>
-</head>
-<body>
-
+---
+layout: documentation
+title: Query Language
+---
 <h1>The Bazel Query Reference</h1>
 
 <p>
@@ -191,6 +57,7 @@
 <a href="#kind">kind</a><br/>
 <a href="#labels">labels</a><br/>
 <a href="#variables">let</a><br/>
+<a href="#loadfiles">loadfiles</a><br/>
 <a href="#rdeps">rdeps</a><br/>
 <a href="#set">set</a><br/>
 <a href="#some">some</a><br/>
@@ -635,7 +502,9 @@ x intersect (y union z)</pre>
   <code>deps(foo/...)</code> is the dependency graphs whose roots are
   all rules in every package beneath the <code>foo</code> directory.
   Please note that 'dependencies' means only rule and file targets
-  in this context, therefore the BUILD, Skylark and EBL files needed to
+  in this context, therefore the BUILD,
+
+  and Skylark files needed to
   create these targets are not included here. For that you should use the
   <a href="#buildfiles"><code>buildfiles</code></a> operator.
 </p>
@@ -1367,6 +1236,15 @@ genrule(
   will be missing.
 </p>
 
+<h3 id="loadfiles">Package definition files: loadfiles</h3>
+<pre>expr ::= loadfiles(<var>expr</var>)</pre>
+<p>
+  The <code>loadfiles(<var>x</var>)</code> operator returns the set of
+  Skylark files that are needed to load the packages of each target in
+  set <var>x</var>. In other words, for each package, it returns the
+  .bzl files that are referenced from its BUILD files.
+</p>
+
 <h2>Output formats</h2>
 
 <p>
@@ -1828,5 +1706,3 @@ maxrank
   $ bazel query 'kind(maven_jar, deps(//foo:bar))'
   INFO: Empty results
 </pre>
-</body>
-</html>

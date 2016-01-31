@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,15 +13,16 @@
 // limitations under the License.
 package com.google.devtools.build.lib.analysis.util;
 
+import static org.junit.Assert.fail;
+
 import com.google.common.base.Predicates;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedSet;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.Root;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
+import com.google.devtools.build.lib.analysis.config.BinTools;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildConfigurationCollection;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
@@ -45,13 +46,15 @@ import com.google.devtools.build.lib.util.BlazeClock;
 import com.google.devtools.build.lib.util.io.TimestampGranularityMonitor;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
-import com.google.devtools.build.skyframe.SkyFunction;
-import com.google.devtools.build.skyframe.SkyFunctionName;
 import com.google.devtools.common.options.Converters;
 import com.google.devtools.common.options.Option;
 import com.google.devtools.common.options.Options;
 import com.google.devtools.common.options.OptionsBase;
 import com.google.devtools.common.options.OptionsParser;
+
+import org.junit.Before;
+import org.junit.runner.RunWith;
+import org.junit.runners.JUnit4;
 
 import java.lang.reflect.Field;
 import java.util.Collection;
@@ -63,6 +66,7 @@ import java.util.UUID;
 /**
  * Testing framework for tests which check ConfigurationFactory.
  */
+@RunWith(JUnit4.class)
 public abstract class ConfigurationTestCase extends FoundationTestCase {
 
   public static final class TestOptions extends OptionsBase {
@@ -80,31 +84,31 @@ public abstract class ConfigurationTestCase extends FoundationTestCase {
   protected Path workspace;
   protected ImmutableList<Class<? extends FragmentOptions>> buildOptionClasses;
 
-  @Override
-  protected void setUp() throws Exception {
-    super.setUp();
+  @Before
+  public final void initializeSkyframeExecutor() throws Exception {
     workspace = rootDirectory;
-
     ConfiguredRuleClassProvider ruleClassProvider = TestRuleClassProvider.getRuleClassProvider();
-    PathPackageLocator pkgLocator = new PathPackageLocator(rootDirectory);
+    PathPackageLocator pkgLocator =
+        new PathPackageLocator(outputBase, ImmutableList.of(rootDirectory));
     final PackageFactory pkgFactory;
     BlazeDirectories directories = new BlazeDirectories(outputBase, outputBase, rootDirectory);
     pkgFactory = new PackageFactory(ruleClassProvider);
     AnalysisTestUtil.DummyWorkspaceStatusActionFactory workspaceStatusActionFactory =
         new AnalysisTestUtil.DummyWorkspaceStatusActionFactory(directories);
+    AnalysisMock analysisMock = getAnalysisMock();
+
     skyframeExecutor =
         SequencedSkyframeExecutor.create(
-            reporter,
             pkgFactory,
             new TimestampGranularityMonitor(BlazeClock.instance()),
             directories,
+            BinTools.forUnitTesting(directories, TestConstants.EMBEDDED_TOOLS),
             workspaceStatusActionFactory,
             ruleClassProvider.getBuildInfoFactories(),
-            ImmutableSet.<Path>of(),
             ImmutableList.<DiffAwareness.Factory>of(),
             Predicates.<PathFragment>alwaysFalse(),
             Preprocessor.Factory.Supplier.NullSupplier.INSTANCE,
-            ImmutableMap.<SkyFunctionName, SkyFunction>of(),
+            analysisMock.getSkyFunctions(directories),
             ImmutableList.<PrecomputedValue.Injected>of(),
             ImmutableList.<SkyValueDirtinessChecker>of());
 
@@ -112,11 +116,10 @@ public abstract class ConfigurationTestCase extends FoundationTestCase {
         Options.getDefaults(PackageCacheOptions.class).defaultVisibility, true,
         7, ruleClassProvider.getDefaultsPackageContent(), UUID.randomUUID());
 
-    AnalysisMock analysisMock = getAnalysisMock();
     analysisMock.setupMockClient(new MockToolsConfig(rootDirectory));
     analysisMock.setupMockWorkspaceFiles(directories.getEmbeddedBinariesRoot());
     configurationFactory = analysisMock.createConfigurationFactory();
-    buildOptionClasses = analysisMock.getBuildOptions();
+    buildOptionClasses = TestRuleClassProvider.getRuleClassProvider().getOptionFragments();
   }
 
   protected AnalysisMock getAnalysisMock() {
@@ -152,8 +155,8 @@ public abstract class ConfigurationTestCase extends FoundationTestCase {
     configurationFactory.forbidSanityCheck();
     BuildOptions buildOptions = BuildOptions.of(buildOptionClasses, parser);
     BuildConfigurationCollection collection = skyframeExecutor.createConfigurations(
-        configurationFactory, buildOptions, new BlazeDirectories(outputBase, outputBase, workspace),
-        multiCpu, false);
+        reporter, configurationFactory, buildOptions,
+        new BlazeDirectories(outputBase, outputBase, workspace), multiCpu, false);
     return collection;
   }
 

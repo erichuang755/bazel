@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,8 +14,8 @@
 package com.google.devtools.build.lib.bazel.rules.common;
 
 import static com.google.devtools.build.lib.packages.Attribute.attr;
-import static com.google.devtools.build.lib.packages.Type.BOOLEAN;
-import static com.google.devtools.build.lib.packages.Type.LABEL_LIST;
+import static com.google.devtools.build.lib.packages.BuildType.LABEL_LIST;
+import static com.google.devtools.build.lib.syntax.Type.BOOLEAN;
 
 import com.google.devtools.build.lib.analysis.BaseRuleClasses;
 import com.google.devtools.build.lib.analysis.RuleDefinition;
@@ -35,7 +35,6 @@ public final class BazelTestSuiteRule implements RuleDefinition {
             .nonconfigurable("policy decision: should be consistent across configurations"))
         /* <!-- #BLAZE_RULE(test_suite).ATTRIBUTE(tags) -->
         List of text tags such as "small" or "database" or "-flaky". Tags may be any valid string.
-        ${SYNOPSIS}
         <p>
           Tags which begin with a "-" character are considered negative tags. The
           preceding "-" character is not considered part of the tag, so a suite tag
@@ -75,7 +74,6 @@ public final class BazelTestSuiteRule implements RuleDefinition {
 
         /* <!-- #BLAZE_RULE(test_suite).ATTRIBUTE(tests) -->
         A list of test suites and test targets of any language.
-        ${SYNOPSIS}
         <p>
           Any <code>*_test</code> is accepted here, independent of the language. No
           <code>*_binary</code> targets are accepted however, even if they happen to run a test.
@@ -112,15 +110,11 @@ public final class BazelTestSuiteRule implements RuleDefinition {
 
 /*<!-- #BLAZE_RULE (NAME = test_suite, TYPE = TEST, FAMILY = General)[GENERIC_RULE] -->
 
-${ATTRIBUTE_SIGNATURE}
-
 <p>
 A <code>test_suite</code> defines a set of tests that are considered "useful" to humans.  This
 allows projects to define sets of tests, such as "tests you must run before checkin", "our
 project's stress tests" or "all small tests."
 </p>
-
-${ATTRIBUTE_DEFINITION}
 
 <h4 id="test_suite_examples">Examples</h4>
 

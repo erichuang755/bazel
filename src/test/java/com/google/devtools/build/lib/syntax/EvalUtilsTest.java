@@ -1,4 +1,4 @@
-// Copyright 2006-2015 Google Inc. All Rights Reserved.
+// Copyright 2006 The Bazel Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,15 +19,14 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
-import com.google.common.collect.Lists;
+import com.google.devtools.build.lib.syntax.SkylarkList.MutableList;
+import com.google.devtools.build.lib.syntax.SkylarkList.Tuple;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
-import java.util.Arrays;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
@@ -38,36 +37,27 @@ import java.util.TreeMap;
 @RunWith(JUnit4.class)
 public class EvalUtilsTest {
 
-  private static List<?> makeList(Object... args) {
-    return EvalUtils.makeSequence(Arrays.<Object>asList(args), false);
-  }
-
-  private static List<?> makeTuple(Object... args) {
-    return EvalUtils.makeSequence(Arrays.<Object>asList(args), true);
-  }
-
   private static Map<Object, Object> makeDict() {
     return new LinkedHashMap<>();
   }
 
-  private static FilesetEntry makeFilesetEntry() {
-    try {
-      return new FilesetEntry(Label.parseAbsolute("//foo:bar"),
-                              Lists.<Label>newArrayList(), Lists.newArrayList("xyz"), "",
-                              FilesetEntry.SymlinkBehavior.COPY, ".");
-    } catch (Label.SyntaxException e) {
-      throw new RuntimeException("Bad label: ", e);
-    }
+  @Test
+  public void testEmptyStringToIterable() throws Exception {
+    assertThat(EvalUtils.toIterable("", null)).isEmpty();
+  }
+
+  @Test
+  public void testStringToIterable() throws Exception {
+    assertThat(EvalUtils.toIterable("abc", null)).hasSize(3);
   }
 
   @Test
   public void testDataTypeNames() throws Exception {
     assertEquals("string", EvalUtils.getDataTypeName("foo"));
     assertEquals("int", EvalUtils.getDataTypeName(3));
-    assertEquals("Tuple", EvalUtils.getDataTypeName(makeTuple(1, 2, 3)));
-    assertEquals("List",  EvalUtils.getDataTypeName(makeList(1, 2, 3)));
+    assertEquals("tuple", EvalUtils.getDataTypeName(Tuple.of(1, 2, 3)));
+    assertEquals("list",  EvalUtils.getDataTypeName(MutableList.of(null, 1, 2, 3)));
     assertEquals("dict",  EvalUtils.getDataTypeName(makeDict()));
-    assertEquals("FilesetEntry",  EvalUtils.getDataTypeName(makeFilesetEntry()));
     assertEquals("NoneType", EvalUtils.getDataTypeName(Runtime.NONE));
   }
 
@@ -75,10 +65,9 @@ public class EvalUtilsTest {
   public void testDatatypeMutability() throws Exception {
     assertTrue(EvalUtils.isImmutable("foo"));
     assertTrue(EvalUtils.isImmutable(3));
-    assertTrue(EvalUtils.isImmutable(makeTuple(1, 2, 3)));
-    assertFalse(EvalUtils.isImmutable(makeList(1, 2, 3)));
+    assertTrue(EvalUtils.isImmutable(Tuple.of(1, 2, 3)));
+    assertFalse(EvalUtils.isImmutable(MutableList.of(null, 1, 2, 3)));
     assertFalse(EvalUtils.isImmutable(makeDict()));
-    assertFalse(EvalUtils.isImmutable(makeFilesetEntry()));
   }
 
   @Test

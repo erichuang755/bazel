@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,8 +14,8 @@
 package com.google.devtools.build.lib.rules.java;
 
 import static com.google.devtools.build.lib.packages.Attribute.attr;
-import static com.google.devtools.build.lib.packages.Type.STRING;
-import static com.google.devtools.build.lib.packages.Type.STRING_LIST;
+import static com.google.devtools.build.lib.syntax.Type.STRING;
+import static com.google.devtools.build.lib.syntax.Type.STRING_LIST;
 
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.analysis.BaseRuleClasses;
@@ -30,8 +30,7 @@ import com.google.devtools.build.lib.packages.RuleClass.Builder;
 public final class JavaToolchainRule implements RuleDefinition {
   @Override
   public RuleClass build(Builder builder, RuleDefinitionEnvironment env) {
-    return builder.setUndocumented()
-        .requiresConfigurationFragments(JavaConfiguration.class)
+    return builder.requiresConfigurationFragments(JavaConfiguration.class)
         /* <!-- #BLAZE_RULE(java_toolchain).ATTRIBUTE(source_version) -->
         The Java source version (e.g., '6' or '7'). It specifies which set of code structures
         are allowed in the Java source code.
@@ -75,15 +74,11 @@ public final class JavaToolchainRule implements RuleDefinition {
 }
 /*<!-- #BLAZE_RULE (NAME = java_toolchain, TYPE = OTHER, FAMILY = Java) -->
 
-${ATTRIBUTE_SIGNATURE}
-
 <p>
 Specifies the configuration for the Java compiler. Which toolchain to be used can be changed through
 the --java_toolchain argument. Normally you should not write those kind of rules unless you want to
 tune your Java compiler.
 </p>
-
-${ATTRIBUTE_DEFINITION}
 
 <h4 id="java_binary_examples">Examples</h4>
 

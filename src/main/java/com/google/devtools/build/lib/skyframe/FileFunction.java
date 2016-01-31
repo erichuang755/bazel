@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,12 +13,13 @@
 // limitations under the License.
 package com.google.devtools.build.lib.skyframe;
 
+import com.google.common.base.Predicate;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Sets;
 import com.google.devtools.build.lib.pkgcache.PathPackageLocator;
 import com.google.devtools.build.lib.util.Pair;
-import com.google.devtools.build.lib.util.io.TimestampGranularityMonitor;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.RootedPath;
@@ -28,7 +29,6 @@ import com.google.devtools.build.skyframe.SkyFunctionException.Transience;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
 
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicReference;
@@ -44,21 +44,15 @@ import javax.annotation.Nullable;
  */
 public class FileFunction implements SkyFunction {
   private final AtomicReference<PathPackageLocator> pkgLocator;
-  private final TimestampGranularityMonitor tsgm;
-  private final ExternalFilesHelper externalFilesHelper;
 
-  public FileFunction(AtomicReference<PathPackageLocator> pkgLocator,
-      TimestampGranularityMonitor tsgm,
-      ExternalFilesHelper externalFilesHelper) {
+  public FileFunction(AtomicReference<PathPackageLocator> pkgLocator) {
     this.pkgLocator = pkgLocator;
-    this.tsgm = tsgm;
-    this.externalFilesHelper = externalFilesHelper;
   }
 
   @Override
   public SkyValue compute(SkyKey skyKey, Environment env) throws FileFunctionException {
     RootedPath rootedPath = (RootedPath) skyKey.argument();
-    RootedPath realRootedPath = rootedPath;
+    RootedPath realRootedPath = null;
     FileStateValue realFileStateValue = null;
     PathFragment relativePath = rootedPath.getRelativePath();
 
@@ -82,7 +76,16 @@ public class FileFunction implements SkyFunction {
       return null;
     }
     if (realFileStateValue == null) {
+      realRootedPath = rootedPath;
       realFileStateValue = fileStateValue;
+    } else if (rootedPath.equals(realRootedPath) && !fileStateValue.equals(realFileStateValue)) {
+      String message = String.format(
+          "Some filesystem operations implied %s was a %s but others made us think it was a %s",
+          rootedPath.asPath().getPathString(),
+          fileStateValue.prettyPrint(),
+          realFileStateValue.prettyPrint());
+      throw new FileFunctionException(new InconsistentFilesystemException(message),
+          Transience.TRANSIENT);
     }
 
     ArrayList<RootedPath> symlinkChain = new ArrayList<>();
@@ -90,33 +93,13 @@ public class FileFunction implements SkyFunction {
     while (realFileStateValue.getType().equals(FileStateValue.Type.SYMLINK)) {
       symlinkChain.add(realRootedPath);
       orderedSeenPaths.add(realRootedPath.asPath());
-      if (externalFilesHelper.shouldAssumeImmutable(realRootedPath)) {
-        // If the file is assumed to be immutable, we want to resolve the symlink chain without
-        // adding dependencies since we don't care about incremental correctness.
-        try {
-          Path realPath = rootedPath.asPath().resolveSymbolicLinks();
-          realRootedPath = RootedPath.toRootedPathMaybeUnderRoot(realPath,
-              pkgLocator.get().getPathEntries());
-          realFileStateValue = FileStateValue.create(realRootedPath, tsgm);
-        } catch (IOException e) {
-          RootedPath root = RootedPath.toRootedPath(
-              rootedPath.asPath().getFileSystem().getRootDirectory(),
-              rootedPath.asPath().getFileSystem().getRootDirectory());
-          return FileValue.value(
-              rootedPath, fileStateValue,
-              root, FileStateValue.NONEXISTENT_FILE_STATE_NODE);
-        } catch (InconsistentFilesystemException e) {
-          throw new FileFunctionException(e, Transience.TRANSIENT);
-        }
-      } else {
-        Pair<RootedPath, FileStateValue> resolvedState = getSymlinkTargetRootedPath(realRootedPath,
-            realFileStateValue.getSymlinkTarget(), orderedSeenPaths, symlinkChain, env);
-        if (resolvedState == null) {
-          return null;
-        }
-        realRootedPath = resolvedState.getFirst();
-        realFileStateValue = resolvedState.getSecond();
+      Pair<RootedPath, FileStateValue> resolvedState = getSymlinkTargetRootedPath(realRootedPath,
+          realFileStateValue.getSymlinkTarget(), orderedSeenPaths, symlinkChain, env);
+      if (resolvedState == null) {
+        return null;
       }
+      realRootedPath = resolvedState.getFirst();
+      realFileStateValue = resolvedState.getSecond();
     }
     return FileValue.value(rootedPath, fileStateValue, realRootedPath, realFileStateValue);
   }
@@ -131,10 +114,7 @@ public class FileFunction implements SkyFunction {
     PathFragment relativePath = rootedPath.getRelativePath();
     RootedPath realRootedPath = rootedPath;
     FileValue parentFileValue = null;
-    // We only resolve ancestors if the file is not assumed to be immutable (handling ancestors
-    // would be too aggressive).
-    if (!externalFilesHelper.shouldAssumeImmutable(rootedPath)
-        && !relativePath.equals(PathFragment.EMPTY_FRAGMENT)) {
+    if (!relativePath.equals(PathFragment.EMPTY_FRAGMENT)) {
       RootedPath parentRootedPath = RootedPath.toRootedPath(rootedPath.getRoot(),
           relativePath.getParentDirectory());
       parentFileValue = (FileValue) env.getValue(FileValue.key(parentRootedPath));
@@ -146,7 +126,8 @@ public class FileFunction implements SkyFunction {
       realRootedPath = RootedPath.toRootedPath(parentRealRootedPath.getRoot(),
           parentRealRootedPath.getRelativePath().getRelative(baseName));
       if (!parentFileValue.exists()) {
-        return Pair.of(realRootedPath, FileStateValue.NONEXISTENT_FILE_STATE_NODE);
+        return Pair.<RootedPath, FileStateValue>of(
+            realRootedPath, FileStateValue.NONEXISTENT_FILE_STATE_NODE);
       }
     }
     FileStateValue realFileStateValue =
@@ -198,68 +179,78 @@ public class FileFunction implements SkyFunction {
       symlinkTargetRootedPath = RootedPath.toRootedPathMaybeUnderRoot(symlinkTargetPath,
           pkgLocator.get().getPathEntries());
     }
-    Path symlinkTargetPath = symlinkTargetRootedPath.asPath();
-    Path existingFloorPath = orderedSeenPaths.floor(symlinkTargetPath);
-    // Here is a brief argument that the following logic is correct.
+    // Suppose we have a symlink chain p -> p1 -> p2 -> ... pK. We want to determine the fully
+    // resolved path, if any, of p. This entails following the chain and noticing if there's a
+    // symlink issue. There three sorts of issues:
+    // (i) Symlink cycle:
+    //   p -> p1 -> p2 -> p1
+    // (ii) Unbounded expansion caused by a symlink to a descendant of a member of the chain:
+    //   p -> a/b -> c/d -> a/b/e
+    // (iii) Unbounded expansion caused by a symlink to an ancestor of a member of the chain:
+    //   p -> a/b -> c/d -> a
     //
-    // Any path 'p' in the symlink chain that is no larger than 'symlinkTargetPath' is one of:
-    //   (i)   'symlinkTargetPath'
-    //   (ii)   a smaller sibling 's' of 'symlinkTargetPath' or a sibling of an ancestor of
-    //         'symlinkTargetPath'
-    //   (iii)  an ancestor 'a' of 'symlinkTargetPath'
-    //   (iv) something else (e.g. a smaller sibling of an ancestor of 'symlinkTargetPath')
-    // If the largest 'p' is 'symlinkTarget' itself then 'existingFloorPath' will be that and we
-    // have found cycle. Otherwise, if there is such a 's' then 'existingFloorPath' will be the
-    // largest one. But the presence of any such 's' in the symlink chain implies an infinite
-    // expansion, which we would have already noticed. On the other hand, if there is such an 'a'
-    // then 'existingFloorPath' will be the largest one that and we definitely have found an
-    // infinite symlink expansion. Otherwise, if there is no such 'a', then the presence of
-    // 'symlinkTargetPath' doesn't create an infinite symlink expansion.
-    if (existingFloorPath != null && symlinkTargetPath.startsWith(existingFloorPath)) {
-      SkyKey uniquenessKey;
-      FileSymlinkException fse;
-      if (symlinkTargetPath.equals(existingFloorPath)) {
-        Pair<ImmutableList<RootedPath>, ImmutableList<RootedPath>> pathAndChain =
-            splitIntoPathAndChain(symlinkTargetRootedPath.asPath(), symlinkChain);
-        FileSymlinkCycleException fsce =
-            new FileSymlinkCycleException(pathAndChain.getFirst(), pathAndChain.getSecond());
-        uniquenessKey = FileSymlinkCycleUniquenessValue.key(fsce.getCycle());
-        fse = fsce;
-      } else {
-        Pair<ImmutableList<RootedPath>, ImmutableList<RootedPath>> pathAndChain =
-            splitIntoPathAndChain(existingFloorPath,
-                ImmutableList.copyOf(Iterables.concat(symlinkChain,
-                    ImmutableList.of(symlinkTargetRootedPath))));
-        uniquenessKey = FileSymlinkInfiniteExpansionUniquenessValue.key(pathAndChain.getSecond());
-        fse = new FileSymlinkInfiniteExpansionException(
-            pathAndChain.getFirst(), pathAndChain.getSecond());
-      }
+    // We can detect all three of these symlink issues by following the chain and deciding if each
+    // new element is problematic. Here is our incremental algorithm:
+    //
+    // Suppose we encounter the symlink target p and we have already encountered all the paths in P:
+    //   If p is in P then we have a found a cycle (i).
+    //   If p is a descendant of any path p' in P then we have unbounded expansion (ii).
+    //   If p is an ancestor of any path p' in P then we have unbounded expansion (iii).
+    // We can check for these cases efficiently (read: sublinear time) by finding the extremal
+    // candidate p' for (ii) and (iii).
+    Path symlinkTargetPath = symlinkTargetRootedPath.asPath();
+    SkyKey uniquenessKey = null;
+    FileSymlinkException fse = null;
+    Path seenFloorPath = orderedSeenPaths.floor(symlinkTargetPath);
+    Path seenCeilingPath = orderedSeenPaths.ceiling(symlinkTargetPath);
+    if (orderedSeenPaths.contains(symlinkTargetPath)) {
+      // 'rootedPath' is a symlink to a previous element in the symlink chain (i).
+      Pair<ImmutableList<RootedPath>, ImmutableList<RootedPath>> pathAndChain =
+          CycleUtils.splitIntoPathAndChain(
+              isPathPredicate(symlinkTargetRootedPath.asPath()), symlinkChain);
+      FileSymlinkCycleException fsce =
+          new FileSymlinkCycleException(pathAndChain.getFirst(), pathAndChain.getSecond());
+      uniquenessKey = FileSymlinkCycleUniquenessFunction.key(fsce.getCycle());
+      fse = fsce;
+    } else if (seenFloorPath != null && symlinkTargetPath.startsWith(seenFloorPath)) {
+      // 'rootedPath' is a symlink to a descendant of a previous element in the symlink chain (ii).
+      Pair<ImmutableList<RootedPath>, ImmutableList<RootedPath>> pathAndChain =
+          CycleUtils.splitIntoPathAndChain(
+              isPathPredicate(seenFloorPath),
+              ImmutableList.copyOf(
+                  Iterables.concat(symlinkChain, ImmutableList.of(symlinkTargetRootedPath))));
+      uniquenessKey = FileSymlinkInfiniteExpansionUniquenessFunction.key(pathAndChain.getSecond());
+      fse = new FileSymlinkInfiniteExpansionException(
+          pathAndChain.getFirst(), pathAndChain.getSecond());
+    } else if (seenCeilingPath != null && seenCeilingPath.startsWith(symlinkTargetPath)) {
+      // 'rootedPath' is a symlink to an ancestor of a previous element in the symlink chain (iii).
+      Pair<ImmutableList<RootedPath>, ImmutableList<RootedPath>> pathAndChain =
+          CycleUtils.splitIntoPathAndChain(
+              isPathPredicate(seenCeilingPath),
+              ImmutableList.copyOf(
+                  Iterables.concat(symlinkChain, ImmutableList.of(symlinkTargetRootedPath))));
+      uniquenessKey = FileSymlinkInfiniteExpansionUniquenessFunction.key(pathAndChain.getSecond());
+      fse = new FileSymlinkInfiniteExpansionException(
+          pathAndChain.getFirst(), pathAndChain.getSecond());
+    }
+    if (uniquenessKey != null) {
       if (env.getValue(uniquenessKey) == null) {
         // Note that this dependency is merely to ensure that each unique symlink error gets
         // reported exactly once.
         return null;
       }
-      throw new FileFunctionException(fse);
+      throw new FileFunctionException(Preconditions.checkNotNull(fse, rootedPath));
     }
     return resolveFromAncestors(symlinkTargetRootedPath, env);
   }
 
-  private Pair<ImmutableList<RootedPath>, ImmutableList<RootedPath>> splitIntoPathAndChain(
-      Path startOfCycle, Iterable<RootedPath> symlinkRootedPaths) {
-    boolean inPathToCycle = true;
-    ImmutableList.Builder<RootedPath> pathToCycleBuilder = ImmutableList.builder();
-    ImmutableList.Builder<RootedPath> cycleBuilder = ImmutableList.builder();
-    for (RootedPath rootedPath : symlinkRootedPaths) {
-      if (rootedPath.asPath().equals(startOfCycle)) {
-        inPathToCycle = false;
+  private static final Predicate<RootedPath> isPathPredicate(final Path path) {
+    return new Predicate<RootedPath>() {
+      @Override
+      public boolean apply(RootedPath rootedPath) {
+        return rootedPath.asPath().equals(path);
       }
-      if (inPathToCycle) {
-        pathToCycleBuilder.add(rootedPath);
-      } else {
-        cycleBuilder.add(rootedPath);
-      }
-    }
-    return Pair.of(pathToCycleBuilder.build(), cycleBuilder.build());
+    };
   }
 
   @Nullable
@@ -280,10 +271,6 @@ public class FileFunction implements SkyFunction {
 
     public FileFunctionException(FileSymlinkException e) {
       super(e, Transience.PERSISTENT);
-    }
-
-    public FileFunctionException(IOException e, Transience transience) {
-      super(e, transience);
     }
   }
 }

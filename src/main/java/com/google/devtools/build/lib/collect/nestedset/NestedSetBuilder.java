@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,9 +15,9 @@ package com.google.devtools.build.lib.collect.nestedset;
 
 import static com.google.common.collect.Iterables.getOnlyElement;
 
-import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
+import com.google.devtools.build.lib.util.Preconditions;
 
 import java.util.LinkedHashSet;
 
@@ -249,5 +249,9 @@ public final class NestedSetBuilder<E> {
    */
   public static <E> NestedSetBuilder<E> naiveLinkOrder() {
     return new NestedSetBuilder<>(Order.NAIVE_LINK_ORDER);
+  }
+
+  public static <E> NestedSetBuilder<E> fromNestedSet(NestedSet<E> set) {
+    return new NestedSetBuilder<E>(set.getOrder()).addTransitive(set);
   }
 }

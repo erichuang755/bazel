@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,12 +13,8 @@
 // limitations under the License.
 package com.google.devtools.build.lib.rules;
 
-import com.google.common.base.Function;
-import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetBuilder;
@@ -26,11 +22,12 @@ import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.Runfiles;
 import com.google.devtools.build.lib.analysis.RunfilesProvider;
 import com.google.devtools.build.lib.analysis.RunfilesSupport;
+import com.google.devtools.build.lib.analysis.SkylarkProviderValidationUtil;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.TargetUtils;
-import com.google.devtools.build.lib.packages.Type;
+import com.google.devtools.build.lib.rules.SkylarkRuleContext.Kind;
 import com.google.devtools.build.lib.syntax.BaseFunction;
 import com.google.devtools.build.lib.syntax.ClassObject;
 import com.google.devtools.build.lib.syntax.ClassObject.SkylarkClassObject;
@@ -42,6 +39,9 @@ import com.google.devtools.build.lib.syntax.Mutability;
 import com.google.devtools.build.lib.syntax.Runtime;
 import com.google.devtools.build.lib.syntax.SkylarkNestedSet;
 import com.google.devtools.build.lib.syntax.SkylarkType;
+import com.google.devtools.build.lib.syntax.Type;
+
+import java.util.Map;
 
 /**
  * A helper class to build Rule Configured Targets via runtime loaded rule implementations
@@ -56,13 +56,14 @@ public final class SkylarkRuleConfiguredTargetBuilder {
       throws InterruptedException {
     String expectFailure = ruleContext.attributes().get("expect_failure", Type.STRING);
     try (Mutability mutability = Mutability.create("configured target")) {
-      SkylarkRuleContext skylarkRuleContext = new SkylarkRuleContext(ruleContext);
+      SkylarkRuleContext skylarkRuleContext = new SkylarkRuleContext(ruleContext, Kind.RULE);
       Environment env = Environment.builder(mutability)
           .setSkylark()
           .setGlobals(
               ruleContext.getRule().getRuleClassObject().getRuleDefinitionEnvironment().getGlobals())
           .setEventHandler(ruleContext.getAnalysisEnvironment().getEventHandler())
-          .build(); // NB: we do *not* setLoadingPhase()
+          .build(); // NB: loading phase functions are not available: this is analysis already,
+                    // so we do *not* setLoadingPhase().
       Object target = ruleImplementation.call(
           ImmutableList.<Object>of(skylarkRuleContext),
           ImmutableMap.<String, Object>of(),
@@ -79,7 +80,7 @@ public final class SkylarkRuleConfiguredTargetBuilder {
         return null;
       }
       ConfiguredTarget configuredTarget = createTarget(ruleContext, target);
-      checkOrphanArtifacts(ruleContext);
+      SkylarkProviderValidationUtil.checkOrphanArtifacts(ruleContext);
       return configuredTarget;
     } catch (EvalException e) {
       addRuleToStackTrace(e, ruleContext.getRule(), ruleImplementation);
@@ -99,7 +100,11 @@ public final class SkylarkRuleConfiguredTargetBuilder {
    */
   private static void addRuleToStackTrace(EvalException ex, Rule rule, BaseFunction ruleImpl) {
     if (ex instanceof EvalExceptionWithStackTrace) {
-      ((EvalExceptionWithStackTrace) ex).registerRule(rule, ruleImpl);
+      ((EvalExceptionWithStackTrace) ex)
+          .registerPhantomFuncall(
+              String.format("%s(name = '%s')", rule.getRuleClass(), rule.getName()),
+              rule.getLocation(),
+              ruleImpl);
     }
   }
 
@@ -111,20 +116,6 @@ public final class SkylarkRuleConfiguredTargetBuilder {
       return ((EvalExceptionWithStackTrace) ex).getOriginalMessage();
     }
     return ex.getMessage();
-  }
-
-  private static void checkOrphanArtifacts(RuleContext ruleContext) throws EvalException {
-    ImmutableSet<Artifact> orphanArtifacts =
-        ruleContext.getAnalysisEnvironment().getOrphanArtifacts();
-    if (!orphanArtifacts.isEmpty()) {
-      throw new EvalException(null, "The following files have no generating action:\n"
-          + Joiner.on("\n").join(Iterables.transform(orphanArtifacts,
-        new Function<Artifact, String>() {
-          @Override
-          public String apply(Artifact artifact) {
-            return artifact.getRootRelativePathString();
-          }})));
-    }
   }
 
   // TODO(bazel-team): this whole defaulting - overriding executable, runfiles and files_to_build
@@ -159,6 +150,20 @@ public final class SkylarkRuleConfiguredTargetBuilder {
     return executable;
   }
 
+  private static void addOutputGroups(Object value, Location loc,
+      RuleConfiguredTargetBuilder builder)
+      throws EvalException {
+    Map<String, SkylarkNestedSet> outputGroups = SkylarkType
+        .castMap(value, String.class, SkylarkNestedSet.class, "output_groups");
+
+    for (String outputGroup : outputGroups.keySet()) {
+      SkylarkNestedSet objects = outputGroups.get(outputGroup);
+      builder.addOutputGroup(outputGroup,
+          SkylarkType.cast(objects, SkylarkNestedSet.class, Artifact.class, loc,
+              "Output group '%s'", outputGroup).getSet(Artifact.class));
+    }
+  }
+
   private static ConfiguredTarget addStructFields(RuleContext ruleContext,
       RuleConfiguredTargetBuilder builder, Object target, Artifact executable)
       throws EvalException {
@@ -180,6 +185,8 @@ public final class SkylarkRuleConfiguredTargetBuilder {
           dataRunfiles = cast("data_runfiles", struct, Runfiles.class, loc);
         } else if (key.equals("default_runfiles")) {
           defaultRunfiles = cast("default_runfiles", struct, Runfiles.class, loc);
+        } else if (key.equals("output_groups")) {
+          addOutputGroups(struct.getValue(key), loc, builder);
         } else if (!key.equals("executable")) {
           // We handled executable already.
           builder.addSkylarkTransitiveInfo(key, struct.getValue(key), loc);

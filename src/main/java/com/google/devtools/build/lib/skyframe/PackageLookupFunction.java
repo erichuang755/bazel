@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,12 +13,11 @@
 // limitations under the License.
 package com.google.devtools.build.lib.skyframe;
 
-import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableSet;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelValidator;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.packages.BuildFileNotFoundException;
-import com.google.devtools.build.lib.packages.ExternalPackage;
 import com.google.devtools.build.lib.packages.NoSuchPackageException;
 import com.google.devtools.build.lib.pkgcache.PathPackageLocator;
 import com.google.devtools.build.lib.syntax.EvalException;
@@ -51,9 +50,14 @@ public class PackageLookupFunction implements SkyFunction {
   public SkyValue compute(SkyKey skyKey, Environment env) throws PackageLookupFunctionException {
     PathPackageLocator pkgLocator = PrecomputedValue.PATH_PACKAGE_LOCATOR.get(env);
     PackageIdentifier packageKey = (PackageIdentifier) skyKey.argument();
-    if (!packageKey.getRepository().isDefault()) {
+    if (PackageFunction.isDefaultsPackage(packageKey)) {
+      return PackageLookupValue.success(pkgLocator.getPathEntries().get(0));
+    }
+
+    if (!packageKey.getRepository().equals(PackageIdentifier.MAIN_REPOSITORY_NAME)
+        && !packageKey.getRepository().isDefault()) {
       return computeExternalPackageLookupValue(skyKey, env, packageKey);
-    } else if (packageKey.getPackageFragment().equals(new PathFragment(ExternalPackage.NAME))) {
+    } else if (packageKey.equals(Label.EXTERNAL_PACKAGE_IDENTIFIER)) {
       return computeWorkspaceLookupValue(env, packageKey);
     }
 
@@ -65,7 +69,20 @@ public class PackageLookupFunction implements SkyFunction {
     }
 
     if (deletedPackages.get().contains(packageKey)) {
-      return PackageLookupValue.deletedPackage();
+      return PackageLookupValue.DELETED_PACKAGE_VALUE;
+    }
+
+    BlacklistedPackagePrefixesValue blacklistedPatternsValue =
+        (BlacklistedPackagePrefixesValue) env.getValue(BlacklistedPackagePrefixesValue.key());
+    if (blacklistedPatternsValue == null) {
+      return null;
+    }
+
+    PathFragment buildFileFragment = packageKey.getPackageFragment();
+    for (PathFragment pattern : blacklistedPatternsValue.getPatterns()) {
+      if (buildFileFragment.startsWith(pattern)) {
+        return PackageLookupValue.DELETED_PACKAGE_VALUE;
+      }
     }
 
     // TODO(bazel-team): The following is O(n^2) on the number of elements on the package path due
@@ -78,7 +95,7 @@ public class PackageLookupFunction implements SkyFunction {
         return value;
       }
     }
-    return PackageLookupValue.noBuildFile();
+    return PackageLookupValue.NO_BUILD_FILE_VALUE;
   }
 
   @Nullable
@@ -128,7 +145,7 @@ public class PackageLookupFunction implements SkyFunction {
     if (fileValue.isFile()) {
       return PackageLookupValue.success(buildFileRootedPath.getRoot());
     }
-    return PackageLookupValue.noBuildFile();
+    return PackageLookupValue.NO_BUILD_FILE_VALUE;
   }
 
   /**
@@ -160,15 +177,12 @@ public class PackageLookupFunction implements SkyFunction {
     if (fileValue == null) {
       return null;
     }
-    Optional<FileValue> overlaidBuildFile = repositoryValue.getOverlaidBuildFile();
+
     if (fileValue.isFile()) {
-      if (overlaidBuildFile.isPresent()) {
-        return PackageLookupValue.overlaidBuildFile(repositoryValue.getPath(), overlaidBuildFile);
-      } else {
         return PackageLookupValue.success(repositoryValue.getPath());
-      }
     }
-    return PackageLookupValue.noBuildFile();
+
+    return PackageLookupValue.NO_BUILD_FILE_VALUE;
   }
 
   /**

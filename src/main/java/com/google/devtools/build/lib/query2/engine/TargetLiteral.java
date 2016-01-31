@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 // limitations under the License.
 package com.google.devtools.build.lib.query2.engine;
 
-import com.google.common.base.Preconditions;
+import com.google.devtools.build.lib.util.Preconditions;
 
 import java.util.Collection;
 import java.util.Set;
@@ -41,17 +41,18 @@ final class TargetLiteral extends QueryExpression {
   }
 
   @Override
-  public <T> Set<T> eval(QueryEnvironment<T> env) throws QueryException {
+  public <T> void eval(QueryEnvironment<T> env, Callback<T> callback)
+      throws QueryException, InterruptedException {
     if (isVariableReference()) {
       String varName = LetExpression.getNameFromReference(pattern);
       Set<T> value = env.getVariable(varName);
       if (value == null) {
         throw new QueryException(this, "undefined variable '" + varName + "'");
       }
-      return env.getVariable(varName);
+      callback.process(value);
+    } else {
+      env.getTargetsMatchingPattern(this, pattern, callback);
     }
-
-    return env.getTargetsMatchingPattern(this, pattern);
   }
 
   @Override

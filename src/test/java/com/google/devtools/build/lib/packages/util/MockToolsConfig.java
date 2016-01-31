@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,9 +13,9 @@
 // limitations under the License.
 package com.google.devtools.build.lib.packages.util;
 
-import com.google.common.base.Preconditions;
 import com.google.devtools.build.lib.testutil.BlazeTestUtils;
 import com.google.devtools.build.lib.testutil.TestConstants;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 
@@ -79,8 +79,14 @@ public final class MockToolsConfig {
       }
 
       if (!newContent.toString().equals(existingContent)) {
-        throw new IOException("Conflict: '" + relativePath + "':\n'" + newContent + "'\n vs \n'"
-            + existingContent + "'");
+        throw new IOException(
+            "Conflict: '"
+                + relativePath
+                + "':\n'"
+                + newContent
+                + "'\n vs \n'"
+                + existingContent
+                + "'");
       }
     }
     return path;

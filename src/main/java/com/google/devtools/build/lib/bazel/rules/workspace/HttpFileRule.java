@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,13 +15,16 @@
 package com.google.devtools.build.lib.bazel.rules.workspace;
 
 import static com.google.devtools.build.lib.packages.Attribute.attr;
-import static com.google.devtools.build.lib.packages.Type.STRING;
+import static com.google.devtools.build.lib.syntax.Type.BOOLEAN;
+import static com.google.devtools.build.lib.syntax.Type.STRING;
 
 import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
 import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.packages.RuleClass.Builder;
 import com.google.devtools.build.lib.packages.RuleClass.Builder.RuleClassType;
+import com.google.devtools.build.lib.rules.repository.WorkspaceBaseRule;
+import com.google.devtools.build.lib.rules.repository.WorkspaceConfiguredTargetFactory;
 
 /**
  * Rule definition for the http_file rule.
@@ -35,7 +38,6 @@ public class HttpFileRule implements RuleDefinition {
     return builder
         /* <!-- #BLAZE_RULE(http_file).ATTRIBUTE(url) -->
          A URL to a file that will be made available to Bazel.
-         ${SYNOPSIS}
 
          <p>This must be an http or https URL. Authentication is not support.
          Redirections are followed.</p>
@@ -43,11 +45,15 @@ public class HttpFileRule implements RuleDefinition {
         .add(attr("url", STRING).mandatory())
         /* <!-- #BLAZE_RULE(http_file).ATTRIBUTE(sha256) -->
          The expected SHA-256 of the file downloaded.
-         ${SYNOPSIS}
 
          <p>This must match the SHA-256 of the file downloaded.</p>
          <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
         .add(attr("sha256", STRING).mandatory())
+        /* <!-- #BLAZE_RULE(http_file).ATTRIBUTE(executable) -->
+         If the downloaded file should be made executable. Defaults to False.
+
+         <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
+        .add(attr("executable", BOOLEAN))
         .setWorkspaceOnly()
         .build();
   }
@@ -64,11 +70,7 @@ public class HttpFileRule implements RuleDefinition {
 }
 /*<!-- #BLAZE_RULE (NAME = http_file, TYPE = OTHER, FAMILY = Workspace)[GENERIC_RULE] -->
 
- ${ATTRIBUTE_SIGNATURE}
-
  <p>Downloads a file from a URL and makes it available to be used as a file group.</p>
-
- ${ATTRIBUTE_DEFINITION}
 
  <h4 id="http_file_examples">Examples</h4>
 

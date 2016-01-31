@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,17 +17,19 @@ package com.google.devtools.build.lib.rules.objc;
 import static com.google.devtools.build.lib.packages.Attribute.ComputedDefault;
 import static com.google.devtools.build.lib.packages.Attribute.ConfigurationTransition.HOST;
 import static com.google.devtools.build.lib.packages.Attribute.attr;
-import static com.google.devtools.build.lib.packages.Type.BOOLEAN;
-import static com.google.devtools.build.lib.packages.Type.LABEL;
-import static com.google.devtools.build.lib.packages.Type.LABEL_LIST;
+import static com.google.devtools.build.lib.packages.BuildType.LABEL;
+import static com.google.devtools.build.lib.packages.BuildType.LABEL_LIST;
+import static com.google.devtools.build.lib.syntax.Type.BOOLEAN;
 
+import com.google.devtools.build.lib.Constants;
 import com.google.devtools.build.lib.analysis.BaseRuleClasses;
 import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
 import com.google.devtools.build.lib.packages.AttributeMap;
 import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.packages.RuleClass.Builder;
-import com.google.devtools.build.lib.packages.Type;
+import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
+import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.util.FileType;
 
 /**
@@ -47,10 +49,9 @@ public class ObjcProtoLibraryRule implements RuleDefinition {
   @Override
   public RuleClass build(Builder builder, final RuleDefinitionEnvironment env) {
     return builder
-        .requiresConfigurationFragments(ObjcConfiguration.class)
+        .requiresConfigurationFragments(ObjcConfiguration.class, AppleConfiguration.class)
         /* <!-- #BLAZE_RULE(objc_proto_library).ATTRIBUTE(deps) -->
         The directly depended upon proto_library rules.
-        ${SYNOPSIS}
         <!-- #END_BLAZE_RULE.ATTRIBUTE -->*/
         .override(attr("deps", LABEL_LIST)
             // Support for files in deps is for backwards compatibility.
@@ -59,33 +60,28 @@ public class ObjcProtoLibraryRule implements RuleDefinition {
         /* <!-- #BLAZE_RULE(objc_proto_library).ATTRIBUTE(options_file) -->
         Optional options file to apply to protos which affects compilation (e.g. class
         whitelist/blacklist settings).
-        ${SYNOPSIS}
         <!-- #END_BLAZE_RULE.ATTRIBUTE -->*/
         .add(attr(OPTIONS_FILE_ATTR, LABEL).legacyAllowAnyFileType().singleArtifact().cfg(HOST))
         /* <!-- #BLAZE_RULE(objc_proto_library).ATTRIBUTE(output_cpp) -->
         If true, output C++ rather than ObjC.
-        ${SYNOPSIS}
         <!-- #END_BLAZE_RULE.ATTRIBUTE -->*/
         .add(attr(OUTPUT_CPP_ATTR, BOOLEAN).value(false))
         /* <!-- #BLAZE_RULE(objc_proto_library).ATTRIBUTE(use_objc_header_names) -->
         If true, output headers with .pbobjc.h, rather than .pb.h.
-        ${SYNOPSIS}
         <!-- #END_BLAZE_RULE.ATTRIBUTE -->*/
         .add(attr(PER_PROTO_INCLUDES, BOOLEAN).value(false))
         /* <!-- #BLAZE_RULE(objc_proto_library).ATTRIBUTE(per_proto_includes) -->
         If true, always add all directories to objc_library includes,
-        overriding --noobjc_per_proto_includes.
-        ${SYNOPSIS}
         <!-- #END_BLAZE_RULE.ATTRIBUTE -->*/
         .add(attr(COMPILE_PROTOS_ATTR, LABEL)
             .allowedFileTypes(FileType.of(".py"))
             .cfg(HOST)
             .singleArtifact()
-            .value(env.getLabel("//tools/objc:compile_protos")))
+            .value(env.getLabel(Constants.TOOLS_REPOSITORY + "//tools/objc:compile_protos")))
         .add(attr(PROTO_SUPPORT_ATTR, LABEL)
             .legacyAllowAnyFileType()
             .cfg(HOST)
-            .value(env.getLabel("//tools/objc:proto_support")))
+            .value(env.getLabel(Constants.TOOLS_REPOSITORY + "//tools/objc:proto_support")))
         .add(attr(USE_OBJC_HEADER_NAMES_ATTR, BOOLEAN).value(false))
         .add(attr(LIBPROTOBUF_ATTR, LABEL).allowedRuleClasses("objc_library")
             .value(new ComputedDefault(OUTPUT_CPP_ATTR) {
@@ -97,7 +93,7 @@ public class ObjcProtoLibraryRule implements RuleDefinition {
               }
             }))
         .add(attr("$xcodegen", LABEL).cfg(HOST).exec()
-            .value(env.getLabel("//tools/objc:xcodegen")))
+            .value(env.getLabel(Constants.TOOLS_REPOSITORY + "//tools/objc:xcodegen")))
         .build();
   }
 
@@ -106,18 +102,14 @@ public class ObjcProtoLibraryRule implements RuleDefinition {
     return RuleDefinition.Metadata.builder()
         .name("objc_proto_library")
         .factoryClass(ObjcProtoLibrary.class)
-        .ancestors(BaseRuleClasses.RuleBase.class)
+        .ancestors(BaseRuleClasses.RuleBase.class, ObjcRuleClasses.XcrunRule.class)
         .build();
   }
 }
 
 /*<!-- #BLAZE_RULE (NAME = objc_proto_library, TYPE = LIBRARY, FAMILY = Objective-C) -->
 
-${ATTRIBUTE_SIGNATURE}
-
 <p>This rule produces a static library from the given proto_library dependencies, after applying an
 options file.</p>
-
-${ATTRIBUTE_DEFINITION}
 
 <!-- #END_BLAZE_RULE -->*/

@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -33,7 +33,7 @@ public class BazelProtoLibrary implements RuleConfiguredTargetFactory {
   public ConfiguredTarget create(RuleContext ruleContext) throws InterruptedException {
     ImmutableList<Artifact> protoSources =
         ruleContext.getPrerequisiteArtifacts("srcs", Mode.TARGET).list();
-    ImmutableList<Artifact> directProtoSources = ProtoCommon.getDirectProtoSources(
+    ImmutableList<Artifact> checkDepsProtoSources = ProtoCommon.getCheckDepsProtoSources(
         ruleContext, protoSources);
     ProtoCommon.checkSourceFilesAreInSamePackage(ruleContext);
 
@@ -44,7 +44,8 @@ public class BazelProtoLibrary implements RuleConfiguredTargetFactory {
         ProtoCommon.createRunfilesProvider(transitiveImports, ruleContext);
     // TODO(bazel-team): this second constructor argument is superfluous and should be removed.
     ProtoSourcesProvider sourcesProvider =
-        new ProtoSourcesProvider(transitiveImports, transitiveImports, directProtoSources);
+        ProtoSourcesProvider.create(
+            transitiveImports, transitiveImports, protoSources, checkDepsProtoSources);
 
     return new RuleConfiguredTargetBuilder(ruleContext)
         .add(RunfilesProvider.class, runfilesProvider)

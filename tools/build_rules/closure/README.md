@@ -3,7 +3,7 @@
 ## Overview
 
 These rules define targets for JavaScript, stylesheets, and templates that will
-be compiled with the Closure Tools toolchain. The following rules are defined:
+be compiled with the Closure Tools toolchain.
 
 * `closure_js_binary`
 * `closure_js_library`
@@ -12,9 +12,14 @@ be compiled with the Closure Tools toolchain. The following rules are defined:
 
 ## Setup
 
-The rules defined in `//tools/build_rules/closure/closure.WORKSPACE` must be
-copied into your `WORKSPACE` file before using these rules. These rules define
-the locations of the various Closure Tools binaries and the Closure Library.
+Add the following to your `WORKSPACE` file to add the external repositories
+for the various Closure Tools binaries and the Closure Library:
+
+```python
+load("/tools/build_rules/closure/closure_repositories", "closure_repositories")
+
+closure_repositories()
+```
 
 ## Usage
 

@@ -28,40 +28,6 @@ default_toolchain {
 }
 
 toolchain {
-  abi_version: "arm"
-  abi_libc_version: "armeabi-v7a"
-  builtin_sysroot: ""
-  compiler: "compiler"
-  host_system_name: "armeabi-v7a"
-  needsPic: true
-  supports_gold_linker: false
-  supports_incremental_linker: false
-  supports_fission: false
-  supports_interface_shared_objects: false
-  supports_normalizing_ar: false
-  supports_start_end_lib: false
-  supports_thin_archives: false
-  target_libc: "armeabi-v7a"
-  target_cpu: "armeabi-v7a"
-  target_system_name: "armeabi-v7a"
-  toolchain_identifier: "stub_armeabi-v7a"
-
-  tool_path { name: "ar" path: "/bin/false" }
-  tool_path { name: "compat-ld" path: "/bin/false" }
-  tool_path { name: "cpp" path: "/bin/false" }
-  tool_path { name: "dwp" path: "/bin/false" }
-  tool_path { name: "gcc" path: "/bin/false" }
-  tool_path { name: "gcov" path: "/bin/false" }
-  tool_path { name: "ld" path: "/bin/false" }
-
-  tool_path { name: "nm" path: "/bin/false" }
-  tool_path { name: "objcopy" path: "/bin/false" }
-  tool_path { name: "objdump" path: "/bin/false" }
-  tool_path { name: "strip" path: "/bin/false" }
-}
-
-
-toolchain {
   abi_version: "armeabi-v7a"
   abi_libc_version: "armeabi-v7a"
   builtin_sysroot: ""
@@ -144,6 +110,7 @@ toolchain {
 
   # Anticipated future default.
   unfiltered_cxx_flag: "-no-canonical-prefixes"
+  unfiltered_cxx_flag: "-fno-canonical-system-headers"
 
   # Make C++ compilation deterministic. Use linkstamping instead of these
   # compiler symbols.
@@ -159,8 +126,6 @@ toolchain {
   compiler_flag: "-U_FORTIFY_SOURCE"
   compiler_flag: "-D_FORTIFY_SOURCE=1"
   compiler_flag: "-fstack-protector"
-  compiler_flag: "-fPIE"
-  linker_flag: "-pie"
   linker_flag: "-Wl,-z,relro,-z,now"
 
   # Enable coloring even if there's no attached terminal. Bazel removes the
@@ -242,14 +207,9 @@ toolchain {
   linker_flag: "-lstdc++"
   linker_flag: "-undefined"
   linker_flag: "dynamic_lookup"
-  cxx_builtin_include_directory: "/usr/include"
-  cxx_builtin_include_directory: "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain"
-  cxx_builtin_include_directory: "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs"
-  cxx_builtin_include_directory: "/opt/local/include"
-  cxx_builtin_include_directory: "/usr/local/include"
-  cxx_builtin_include_directory: "/Library/Developer/CommandLineTools"
-  cxx_builtin_include_directory: "/System/Library/Frameworks"
-  cxx_builtin_include_directory: "/Library/Frameworks"
+  # TODO(ulfjack): This is wrong on so many levels. Figure out a way to auto-detect the proper
+  # setting from the local compiler, and also how to make incremental builds correct.
+  cxx_builtin_include_directory: "/"
   tool_path { name: "gcov" path: "/usr/bin/gcov" }
   tool_path { name: "ld" path: "/usr/bin/ld" }
   tool_path { name: "nm" path: "/usr/bin/nm" }
@@ -261,6 +221,7 @@ toolchain {
 
   # Anticipated future default.
   unfiltered_cxx_flag: "-no-canonical-prefixes"
+
   # Make C++ compilation deterministic. Use linkstamping instead of these
   # compiler symbols.
   unfiltered_cxx_flag: "-Wno-builtin-macro-redefined"
@@ -272,7 +233,6 @@ toolchain {
   # Conservative choice; -D_FORTIFY_SOURCE=2 may be unsafe in some cases.
   compiler_flag: "-D_FORTIFY_SOURCE=1"
   compiler_flag: "-fstack-protector"
-  compiler_flag: "-fPIE"
 
   # Enable coloring even if there's no attached terminal. Bazel removes the
   # escape sequences if --nocolor is specified.
@@ -365,6 +325,7 @@ toolchain {
 
   # Anticipated future default.
   unfiltered_cxx_flag: "-no-canonical-prefixes"
+  unfiltered_cxx_flag: "-fno-canonical-system-headers"
 
   # Make C++ compilation deterministic. Use linkstamping instead of these
   # compiler symbols.
@@ -380,8 +341,6 @@ toolchain {
   compiler_flag: "-U_FORTIFY_SOURCE"
   compiler_flag: "-D_FORTIFY_SOURCE=1"
   compiler_flag: "-fstack-protector"
-  compiler_flag: "-fPIE"
-  linker_flag: "-pie"
   linker_flag: "-Wl,-z,relro,-z,now"
 
   # Enable coloring even if there's no attached terminal. Bazel removes the

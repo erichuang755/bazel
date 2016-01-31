@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,9 +18,8 @@ import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 import static com.google.devtools.build.lib.testutil.MoreAsserts.assertContainsEvent;
 import static com.google.devtools.build.lib.testutil.MoreAsserts.assertEventCount;
-import static com.google.devtools.build.lib.testutil.MoreAsserts.assertGreaterThan;
-import static com.google.devtools.build.lib.testutil.MoreAsserts.assertLessThan;
 import static com.google.devtools.build.lib.testutil.MoreAsserts.assertNoEvents;
+import static com.google.devtools.build.skyframe.EvaluationResultSubjectFactory.assertThatEvaluationResult;
 import static com.google.devtools.build.skyframe.GraphTester.CONCATENATE;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -29,7 +28,6 @@ import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
-import com.google.common.base.Predicate;
 import com.google.common.base.Supplier;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -42,14 +40,13 @@ import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventCollector;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.events.EventKind;
-import com.google.devtools.build.lib.events.OutputFilter.RegexOutputFilter;
-import com.google.devtools.build.lib.events.Reporter;
 import com.google.devtools.build.lib.testutil.TestThread;
 import com.google.devtools.build.lib.testutil.TestUtils;
 import com.google.devtools.build.skyframe.GraphTester.StringValue;
 import com.google.devtools.build.skyframe.NotifyingInMemoryGraph.EventType;
 import com.google.devtools.build.skyframe.NotifyingInMemoryGraph.Listener;
 import com.google.devtools.build.skyframe.NotifyingInMemoryGraph.Order;
+import com.google.devtools.build.skyframe.ParallelEvaluator.EventFilter;
 import com.google.devtools.build.skyframe.SkyFunctionException.Transience;
 
 import org.junit.After;
@@ -79,18 +76,16 @@ import javax.annotation.Nullable;
 @RunWith(JUnit4.class)
 public class ParallelEvaluatorTest {
   protected ProcessableGraph graph;
-  protected IntVersion graphVersion = new IntVersion(0);
+  protected IntVersion graphVersion = IntVersion.of(0);
   protected GraphTester tester = new GraphTester();
 
   private EventCollector eventCollector;
-  private EventHandler reporter;
 
   private EvaluationProgressReceiver revalidationReceiver;
 
   @Before
   public void initializeReporter() {
-    eventCollector = new EventCollector(EventKind.ALL_EVENTS);
-    reporter = new Reporter(eventCollector);
+    eventCollector = new EventCollector();
   }
 
   @After
@@ -101,15 +96,17 @@ public class ParallelEvaluatorTest {
     }
   }
 
-  private ParallelEvaluator makeEvaluator(ProcessableGraph graph,
-      ImmutableMap<SkyFunctionName, ? extends SkyFunction> builders, boolean keepGoing,
-      Predicate<Event> storedEventFilter) {
+  private ParallelEvaluator makeEvaluator(
+      ProcessableGraph graph,
+      ImmutableMap<SkyFunctionName, ? extends SkyFunction> builders,
+      boolean keepGoing,
+      EventFilter storedEventFilter) {
     Version oldGraphVersion = graphVersion;
     graphVersion = graphVersion.next();
     return new ParallelEvaluator(graph,
         oldGraphVersion,
         builders,
-        reporter,
+        eventCollector,
         new MemoizingEvaluator.EmittedEventState(),
         storedEventFilter,
         keepGoing,
@@ -146,9 +143,7 @@ public class ParallelEvaluatorTest {
 
   protected <T extends SkyValue> EvaluationResult<T> eval(boolean keepGoing, Iterable<SkyKey> keys)
       throws InterruptedException {
-    ParallelEvaluator evaluator = makeEvaluator(graph,
-        ImmutableMap.of(GraphTester.NODE_TYPE, tester.createDelegatingFunction()),
-        keepGoing);
+    ParallelEvaluator evaluator = makeEvaluator(graph, tester.getSkyFunctionMap(), keepGoing);
     return evaluator.eval(keys);
   }
 
@@ -420,9 +415,9 @@ public class ParallelEvaluatorTest {
     try {
       evaluator.eval(ImmutableList.of(valueToEval));
     } catch (RuntimeException re) {
-      assertTrue(re.getMessage()
-          .contains("Unrecoverable error while evaluating node '" + valueToEval.toString() + "'"));
-      assertTrue(re.getCause() instanceof CustomRuntimeException);
+      assertThat(re.getMessage())
+          .contains("Unrecoverable error while evaluating node '" + valueToEval.toString() + "'");
+      assertThat(re.getCause()).isInstanceOf(CustomRuntimeException.class);
     }
   }
 
@@ -434,42 +429,6 @@ public class ParallelEvaluatorTest {
     assertEquals("a", value.getValue());
     assertContainsEvent(eventCollector, "warning on 'a'");
     assertEventCount(1, eventCollector);
-  }
-
-  @Test
-  public void warningMatchesRegex() throws Exception {
-    graph = new InMemoryGraph();
-    ((Reporter) reporter).setOutputFilter(RegexOutputFilter.forRegex("a"));
-    set("example", "a value").setWarning("warning message");
-    SkyKey a = GraphTester.toSkyKey("example");
-    tester.getOrCreate(a).setTag("a");
-    StringValue value = (StringValue) eval(false, a);
-    assertEquals("a value", value.getValue());
-    assertContainsEvent(eventCollector, "warning message");
-    assertEventCount(1, eventCollector);
-  }
-
-  @Test
-  public void warningMatchesRegexOnlyTag() throws Exception {
-    graph = new InMemoryGraph();
-    ((Reporter) reporter).setOutputFilter(RegexOutputFilter.forRegex("a"));
-    set("a", "a value").setWarning("warning on 'a'");
-    SkyKey a = GraphTester.toSkyKey("a");
-    tester.getOrCreate(a).setTag("b");
-    StringValue value = (StringValue) eval(false, a);
-    assertEquals("a value", value.getValue());
-    assertEventCount(0, eventCollector);  }
-
-  @Test
-  public void warningDoesNotMatchRegex() throws Exception {
-    graph = new InMemoryGraph();
-    ((Reporter) reporter).setOutputFilter(RegexOutputFilter.forRegex("b"));
-    set("a", "a").setWarning("warning on 'a'");
-    SkyKey a = GraphTester.toSkyKey("a");
-    tester.getOrCreate(a).setTag("a");
-    StringValue value = (StringValue) eval(false, a);
-    assertEquals("a", value.getValue());
-    assertEventCount(0, eventCollector);
   }
 
   /** Regression test: events from already-done value not replayed. */
@@ -514,23 +473,29 @@ public class ParallelEvaluatorTest {
         return null;
       }
     });
-    ParallelEvaluator evaluator = makeEvaluator(graph,
-        ImmutableMap.of(GraphTester.NODE_TYPE, tester.createDelegatingFunction()),
-        /*keepGoing=*/false, new Predicate<Event>() {
-            @Override
-            public boolean apply(Event event) {
-              return event.getKind() == EventKind.ERROR;
-            }
-        });
+    ParallelEvaluator evaluator =
+        makeEvaluator(
+            graph,
+            tester.getSkyFunctionMap(),
+            /*keepGoing=*/ false,
+            new EventFilter() {
+              @Override
+              public boolean apply(Event event) {
+                return event.getKind() == EventKind.ERROR;
+              }
+
+              @Override
+              public boolean storeEvents() {
+                return true;
+              }
+            });
     evaluator.eval(ImmutableList.of(a));
     assertTrue(evaluated.get());
     assertEventCount(2, eventCollector);
     assertContainsEvent(eventCollector, "boop");
     assertContainsEvent(eventCollector, "beep");
     eventCollector.clear();
-    evaluator = makeEvaluator(graph,
-        ImmutableMap.of(GraphTester.NODE_TYPE, tester.createDelegatingFunction()),
-        /*keepGoing=*/false);
+    evaluator = makeEvaluator(graph, tester.getSkyFunctionMap(), /*keepGoing=*/ false);
     evaluated.set(false);
     evaluator.eval(ImmutableList.of(a));
     assertFalse(evaluated.get());
@@ -592,25 +557,28 @@ public class ParallelEvaluatorTest {
     SkyKey catastropheKey = GraphTester.toSkyKey("catastrophe");
     SkyKey otherKey = GraphTester.toSkyKey("someKey");
 
-    tester.getOrCreate(catastropheKey).setBuilder(new SkyFunction() {
-      @Nullable
-      @Override
-      public SkyValue compute(SkyKey skyKey, Environment env) throws SkyFunctionException {
-        throw new SkyFunctionException(new SomeErrorException("bad"),
-            Transience.PERSISTENT) {
-          @Override
-          public boolean isCatastrophic() {
-            return true;
-          }
-        };
-      }
+    final Exception catastrophe = new SomeErrorException("bad");
+    tester
+        .getOrCreate(catastropheKey)
+        .setBuilder(
+            new SkyFunction() {
+              @Nullable
+              @Override
+              public SkyValue compute(SkyKey skyKey, Environment env) throws SkyFunctionException {
+                throw new SkyFunctionException(catastrophe, Transience.PERSISTENT) {
+                  @Override
+                  public boolean isCatastrophic() {
+                    return true;
+                  }
+                };
+              }
 
-      @Nullable
-      @Override
-      public String extractTag(SkyKey skyKey) {
-        return null;
-      }
-    });
+              @Nullable
+              @Override
+              public String extractTag(SkyKey skyKey) {
+                return null;
+              }
+            });
 
     tester.getOrCreate(otherKey).setBuilder(new SkyFunction() {
       @Nullable
@@ -636,6 +604,7 @@ public class ParallelEvaluatorTest {
     } else {
       assertTrue(result.hasError());
       assertThat(result.errorMap()).isEmpty();
+      assertThat(result.getCatastrophe()).isSameAs(catastrophe);
     }
   }
 
@@ -697,11 +666,11 @@ public class ParallelEvaluatorTest {
 
     EvaluationResult<SkyValue> result = eval(/*keepGoing=*/true, ImmutableList.of(recoveryKey));
     assertThat(result.errorMap()).isEmpty();
-    assertTrue(result.hasError());
+    assertThatEvaluationResult(result).hasNoError();
     assertEquals(new StringValue("i recovered"), result.get(recoveryKey));
 
     result = eval(/*keepGoing=*/false, ImmutableList.of(topKey));
-    assertTrue(result.hasError());
+    assertThatEvaluationResult(result).hasError();
     assertThat(result.keyNames()).isEmpty();
     assertEquals(1, result.errorMap().size());
     assertNotNull(result.getError(topKey).getException());
@@ -1103,8 +1072,8 @@ public class ParallelEvaluatorTest {
    * topKey, if {@code selfEdge} is true.
    */
   private static void assertManyCycles(ErrorInfo errorInfo, SkyKey topKey, boolean selfEdge) {
-    assertGreaterThan(1, Iterables.size(errorInfo.getCycleInfo()));
-    assertLessThan(50, Iterables.size(errorInfo.getCycleInfo()));
+    assertThat(Iterables.size(errorInfo.getCycleInfo())).isGreaterThan(1);
+    assertThat(Iterables.size(errorInfo.getCycleInfo())).isLessThan(50);
     boolean foundSelfEdge = false;
     for (CycleInfo cycle : errorInfo.getCycleInfo()) {
       assertEquals(1, cycle.getCycle().size()); // Self-edge.
@@ -1584,11 +1553,9 @@ public class ParallelEvaluatorTest {
       assertThat(result.keyNames()).isEmpty();
       assertEquals(topException, result.getError(topKey).getException());
       assertThat(result.getError(topKey).getRootCauses()).containsExactly(topKey);
-      assertTrue(result.hasError());
+      assertThatEvaluationResult(result).hasError();
     } else {
-      // result.hasError() is set to true even if the top-level value returned has recovered from
-      // an error.
-      assertTrue(result.hasError());
+      assertThatEvaluationResult(result).hasNoError();
       assertSame(topValue, result.get(topKey));
     }
   }

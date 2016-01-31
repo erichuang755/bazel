@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,16 +13,20 @@
 // limitations under the License.
 package com.google.devtools.build.skyframe;
 
+import com.google.common.collect.Interner;
+import com.google.common.collect.Interners;
+
 import java.io.Serializable;
 
 /**
  * Versioning scheme based on integers.
  */
 public final class IntVersion implements Version, Serializable {
+  private static final Interner<IntVersion> interner = Interners.newWeakInterner();
 
   private final long val;
 
-  public IntVersion(long val) {
+  private IntVersion(long val) {
     this.val = val;
   }
 
@@ -31,7 +35,15 @@ public final class IntVersion implements Version, Serializable {
   }
 
   public IntVersion next() {
-    return new IntVersion(val + 1);
+    return of(val + 1);
+  }
+
+  public IntVersion previous() {
+    return of(val - 1);
+  }
+
+  public static IntVersion of(long val) {
+    return interner.intern(new IntVersion(val));
   }
 
   @Override

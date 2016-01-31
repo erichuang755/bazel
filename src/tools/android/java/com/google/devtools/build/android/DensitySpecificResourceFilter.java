@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -120,7 +120,9 @@ public class DensitySpecificResourceFilter {
           .put("hdpi", 240)
           .put("xhdpi", 320)
           .put("400dpi", 400)
+          .put("420dpi", 420)
           .put("xxhdpi", 480)
+          .put("560dpi", 560)
           .put("xxxhdpi", 640)
           .build();
 
@@ -176,17 +178,15 @@ public class DensitySpecificResourceFilter {
         Collection<ResourceInfo> qualifierResourceInfos = qualifierGroups.get(qualifiers);
 
         if (qualifierResourceInfos.size() != 1) {
-          for (final String density : densities) {
-            List<ResourceInfo> sortedResourceInfos = Ordering.natural().onResultOf(
-                new Function<ResourceInfo, Double>() {
-                  @Override
-                  public Double apply(ResourceInfo info) {
-                    return matchScore(info, density);
-                  }
-                }).immutableSortedCopy(qualifierResourceInfos);
+          List<ResourceInfo> sortedResourceInfos = Ordering.natural().onResultOf(
+              new Function<ResourceInfo, Double>() {
+                @Override
+                public Double apply(ResourceInfo info) {
+                  return matchScore(info, densities);
+                }
+              }).immutableSortedCopy(qualifierResourceInfos);
 
-            resourceInfoToRemove.addAll(sortedResourceInfos.subList(1, sortedResourceInfos.size()));
-          }
+          resourceInfoToRemove.addAll(sortedResourceInfos.subList(1, sortedResourceInfos.size()));
         }
       }
     }
@@ -250,26 +250,31 @@ public class DensitySpecificResourceFilter {
     return ImmutableList.copyOf(densityResourceInfos);
   }
 
-  private static double matchScore(ResourceInfo resource, String density) {
-    if (resource.getDensity().equals(density)) {
+  private static double matchScore(ResourceInfo resource, List<String> densities) {
+    double score = 0;
+    for (String density : densities) {
+      score += computeAffinity(DENSITY_MAP.get(resource.getDensity()), DENSITY_MAP.get(density));
+    }
+    return score;
+  }
+
+  private static double computeAffinity(int resourceDensity, int density) {
+    if (resourceDensity == density) {
+      // Exact match is the best.
       return -2;
-    }
-
-    double affinity =
-        Math.log((double) (DENSITY_MAP.get(density)) / DENSITY_MAP.get(resource.getDensity()))
-        / Math.log(2);
-
-    if (affinity == -1) {
+    } else if (resourceDensity == 2 * density) {
       // It's very efficient to downsample an image that's exactly 2x the screen
-      // density, so we prefer that over other non-perfect matches
-      return affinity;
-    } else if (affinity < 0) {
-      // We give a slight bump to images that have the same multiplier but are
-      // higher quality.
-      affinity = Math.abs(affinity + 0.01);
-    }
+      // density, so we prefer that over other non-perfect matches.
+      return -1;
+    } else {
+      double affinity = Math.log((double) density / resourceDensity) / Math.log(2);
 
-    return affinity;
+      // We give a slight bump to images that have the same multiplier but are higher quality.
+      if (affinity < 0) {
+        affinity = Math.abs(affinity) - 0.01;
+      }
+      return affinity;
+    }
   }
 
   /** Filters the contents of a resource directory. */

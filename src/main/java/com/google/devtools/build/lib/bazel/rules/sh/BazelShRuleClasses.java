@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,7 +15,7 @@
 package com.google.devtools.build.lib.bazel.rules.sh;
 
 import static com.google.devtools.build.lib.packages.Attribute.attr;
-import static com.google.devtools.build.lib.packages.Type.LABEL_LIST;
+import static com.google.devtools.build.lib.packages.BuildType.LABEL_LIST;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -54,7 +54,6 @@ public final class BazelShRuleClasses {
       return builder
           /* <!-- #BLAZE_RULE($sh_target).ATTRIBUTE(srcs) -->
           The file containing the shell script.
-          ${SYNOPSIS}
           <p>
             This attribute must be a singleton list, whose element is the shell script.
             This script must be executable, and may be a source file or a generated file.
@@ -67,9 +66,8 @@ public final class BazelShRuleClasses {
               .allowedFileTypes(SH_FILES))
           /* <!-- #BLAZE_RULE($sh_target).ATTRIBUTE(deps) -->
           The list of "library" targets to be aggregated into this target.
-          ${SYNOPSIS}
           See general comments about <code>deps</code>
-          at <a href="#common.deps">Attributes common to all build rules</a>.
+          at <a href="common-definitions.html#common.deps">Attributes common to all build rules</a>.
           <p>
             This attribute should be used to list other <code>sh_library</code> rules that provide
             interpreted program source code depended on by the code in <code>srcs</code>. The files

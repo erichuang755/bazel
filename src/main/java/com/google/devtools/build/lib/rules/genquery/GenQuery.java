@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,6 @@
 
 package com.google.devtools.build.lib.rules.genquery;
 
-import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
 import com.google.common.base.Predicates;
 import com.google.common.collect.ImmutableList;
@@ -30,6 +29,7 @@ import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.Runfiles;
 import com.google.devtools.build.lib.analysis.RunfilesProvider;
 import com.google.devtools.build.lib.analysis.actions.AbstractFileWriteAction;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.cmdline.ResolvedTargets;
 import com.google.devtools.build.lib.cmdline.TargetParsingException;
@@ -38,20 +38,21 @@ import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.events.EventHandler;
+import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.packages.NoSuchPackageException;
 import com.google.devtools.build.lib.packages.NoSuchTargetException;
 import com.google.devtools.build.lib.packages.Package;
 import com.google.devtools.build.lib.packages.Target;
-import com.google.devtools.build.lib.packages.Type;
 import com.google.devtools.build.lib.pkgcache.FilteringPolicies;
 import com.google.devtools.build.lib.pkgcache.FilteringPolicy;
 import com.google.devtools.build.lib.pkgcache.PackageProvider;
 import com.google.devtools.build.lib.pkgcache.TargetPatternEvaluator;
 import com.google.devtools.build.lib.query2.AbstractBlazeQueryEnvironment;
-import com.google.devtools.build.lib.query2.engine.BlazeQueryEvalResult;
+import com.google.devtools.build.lib.query2.engine.DigraphQueryEvalResult;
 import com.google.devtools.build.lib.query2.engine.QueryEnvironment.QueryFunction;
 import com.google.devtools.build.lib.query2.engine.QueryEnvironment.Setting;
 import com.google.devtools.build.lib.query2.engine.QueryException;
+import com.google.devtools.build.lib.query2.engine.QueryUtil.AggregateAllCallback;
 import com.google.devtools.build.lib.query2.engine.SkyframeRestartQueryException;
 import com.google.devtools.build.lib.query2.output.OutputFormatter;
 import com.google.devtools.build.lib.query2.output.QueryOptions;
@@ -63,9 +64,10 @@ import com.google.devtools.build.lib.skyframe.PrecomputedValue.Precomputed;
 import com.google.devtools.build.lib.skyframe.SkyFunctions;
 import com.google.devtools.build.lib.skyframe.TargetPatternValue;
 import com.google.devtools.build.lib.skyframe.TransitiveTargetValue;
-import com.google.devtools.build.lib.syntax.Label;
+import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.util.Pair;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyKey;
@@ -177,18 +179,19 @@ public class GenQuery implements RuleConfiguredTargetFactory {
 
   // The transitive closure of these targets is an upper estimate on the labels
   // the query will touch
-  @Nullable
   private Set<Target> getScope(RuleContext context) {
-    List<Label> scopeLabels = context.attributes().get("scope", Type.LABEL_LIST);
+    List<Label> scopeLabels = context.attributes().get("scope", BuildType.LABEL_LIST);
     Set<Target> scope = Sets.newHashSetWithExpectedSize(scopeLabels.size());
     for (Label scopePart : scopeLabels) {
+      SkyFunction.Environment env = context.getAnalysisEnvironment().getSkyframeEnv();
+      PackageValue packageNode =
+          (PackageValue) env.getValue(PackageValue.key(scopePart.getPackageIdentifier()));
+      Preconditions.checkNotNull(
+          packageNode,
+          "Packages in transitive closure of scope '%s'"
+              + "were already loaded during the loading phase",
+          scopePart);
       try {
-        SkyFunction.Environment env = context.getAnalysisEnvironment().getSkyframeEnv();
-        PackageValue packageNode =  (PackageValue) env.getValue(
-            PackageValue.key(scopePart.getPackageFragment()));
-        if (packageNode == null) {
-          return null;
-        }
         scope.add(packageNode.getPackage().getTarget(scopePart.getName()));
       } catch (NoSuchTargetException e) {
         throw new IllegalStateException(e);
@@ -227,7 +230,8 @@ public class GenQuery implements RuleConfiguredTargetFactory {
     ImmutableMap.Builder<PackageIdentifier, Package> packageMapBuilder = ImmutableMap.builder();
     for (PackageIdentifier pkgId : packageNames.build()) {
       PackageValue pkg = (PackageValue) env.getValue(PackageValue.key(pkgId));
-      Preconditions.checkState(pkg != null, "package %s not preloaded", pkgId);
+      Preconditions.checkNotNull(pkg, "package %s not preloaded", pkgId);
+      Preconditions.checkState(!pkg.getPackage().containsErrors(), pkgId);
       packageMapBuilder.put(pkg.getPackage().getPackageIdentifier(), pkg.getPackage());
     }
     return Pair.of(packageMapBuilder.build(), validTargets.build().toSet());
@@ -236,10 +240,6 @@ public class GenQuery implements RuleConfiguredTargetFactory {
   @Nullable
   private byte[] executeQuery(RuleContext ruleContext, QueryOptions queryOptions,
       Set<Target> scope, String query) throws InterruptedException {
-
-    if (scope == null) {
-      return null;
-    }
     SkyFunction.Environment env = ruleContext.getAnalysisEnvironment().getSkyframeEnv();
     Pair<ImmutableMap<PackageIdentifier, Package>, Set<Label>> closureInfo =
         constructPackageMap(env, scope);
@@ -261,8 +261,9 @@ public class GenQuery implements RuleConfiguredTargetFactory {
                          String query, RuleContext ruleContext)
       throws InterruptedException {
 
-    BlazeQueryEvalResult<Target> queryResult;
+    DigraphQueryEvalResult<Target> queryResult;
     OutputFormatter formatter;
+    AggregateAllCallback<Target> targets = new AggregateAllCallback<>();
     try {
       Set<Setting> settings = queryOptions.toSettings();
 
@@ -284,20 +285,20 @@ public class GenQuery implements RuleConfiguredTargetFactory {
       // All the packages are already loaded at this point, so there is no need
       // to start up many threads. 4 are started up to make good use of multiple
       // cores.
-      queryResult = (BlazeQueryEvalResult<Target>) AbstractBlazeQueryEnvironment
+      queryResult = (DigraphQueryEvalResult<Target>) AbstractBlazeQueryEnvironment
           .newQueryEnvironment(
               /*transitivePackageLoader=*/null, /*graph=*/null, packageProvider,
               evaluator,
               /*keepGoing=*/false,
               ruleContext.attributes().get("strict", Type.BOOLEAN),
-              /*orderedResults=*/QueryOutputUtils.orderResults(queryOptions, formatter),
+              /*orderedResults=*/!QueryOutputUtils.shouldStreamResults(queryOptions, formatter),
               /*universeScope=*/ImmutableList.<String>of(),
               /*loadingPhaseThreads=*/4,
               labelFilter,
               getEventHandler(ruleContext),
               settings,
               ImmutableList.<QueryFunction>of(),
-              /*packagePath=*/null).evaluateQuery(query);
+              /*packagePath=*/null).evaluateQuery(query, targets);
     } catch (SkyframeRestartQueryException e) {
       // Do not emit errors for skyframe restarts. They make output of the ConfiguredTargetFunction
       // inconsistent from run to run, and make detecting legitimate errors more difficult.
@@ -311,7 +312,8 @@ public class GenQuery implements RuleConfiguredTargetFactory {
     PrintStream printStream = new PrintStream(outputStream);
 
     try {
-      QueryOutputUtils.output(queryOptions, queryResult, formatter, printStream,
+      QueryOutputUtils
+          .output(queryOptions, queryResult, targets.getResult(), formatter, printStream,
           queryOptions.aspectDeps.createResolver(packageProvider, getEventHandler(ruleContext)));
     } catch (ClosedByInterruptException e) {
       throw new InterruptedException(e.getMessage());
@@ -387,7 +389,7 @@ public class GenQuery implements RuleConfiguredTargetFactory {
         for (Map.Entry<SkyKey, ValueOrException<NoSuchPackageException>> entry :
           env.getValuesOrThrow(packageKeys, NoSuchPackageException.class).entrySet()) {
           PackageIdentifier pkgName = (PackageIdentifier) entry.getKey().argument();
-          Package pkg = null;
+          Package pkg;
           try {
             PackageValue packageValue = (PackageValue) entry.getValue().get();
             if (packageValue == null) {
@@ -396,11 +398,7 @@ public class GenQuery implements RuleConfiguredTargetFactory {
             }
             pkg = packageValue.getPackage();
           } catch (NoSuchPackageException nspe) {
-            if (nspe.getPackage() != null) {
-              pkg = nspe.getPackage();
-            } else {
-              continue;
-            }
+            continue;
           }
           Preconditions.checkNotNull(pkg, pkgName);
           packages.put(pkgName, pkg);
@@ -483,7 +481,7 @@ public class GenQuery implements RuleConfiguredTargetFactory {
 
     @Override
     public Target getTarget(EventHandler eventHandler, Label label)
-        throws NoSuchPackageException, NoSuchTargetException, InterruptedException {
+        throws NoSuchPackageException, NoSuchTargetException {
       Preconditions.checkState(targets.contains(label), label);
       Package pkg = Preconditions.checkNotNull(pkgMap.get(label.getPackageIdentifier()), label);
       Target target = Preconditions.checkNotNull(pkg.getTarget(label.getName()), label);

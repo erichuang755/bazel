@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,49 +15,78 @@
 package com.google.devtools.build.lib.bazel.repository;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Strings;
 import com.google.common.hash.Hasher;
 import com.google.common.hash.Hashing;
+import com.google.common.io.ByteStreams;
 import com.google.devtools.build.lib.events.Event;
-import com.google.devtools.build.lib.events.Reporter;
+import com.google.devtools.build.lib.events.EventHandler;
+import com.google.devtools.build.lib.packages.AggregatingAttributeMapper;
+import com.google.devtools.build.lib.packages.Rule;
+import com.google.devtools.build.lib.rules.repository.RepositoryFunction.RepositoryFunctionException;
+import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
+import com.google.devtools.build.skyframe.SkyFunctionException;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.Authenticator;
 import java.net.HttpURLConnection;
+import java.net.InetSocketAddress;
+import java.net.PasswordAuthentication;
+import java.net.Proxy;
 import java.net.URL;
-import java.nio.ByteBuffer;
-import java.nio.channels.Channels;
-import java.nio.channels.ReadableByteChannel;
-import java.nio.channels.WritableByteChannel;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import javax.annotation.Nullable;
 
 /**
  * Helper class for downloading a file from a URL.
  */
 public class HttpDownloader {
-  private static final int BUFFER_SIZE = 8192;
+  private static final int BUFFER_SIZE = 32 * 1024;
 
   private final String urlString;
   private final String sha256;
   private final String type;
   private final Path outputDirectory;
-  private final Reporter reporter;
+  private final EventHandler eventHandler;
   private final ScheduledExecutorService scheduler;
 
-  HttpDownloader(
-      Reporter reporter, String urlString, String sha256, Path outputDirectory, String type) {
+  private HttpDownloader(EventHandler eventHandler, String urlString, String sha256,
+      Path outputDirectory, String type) {
     this.urlString = urlString;
     this.sha256 = sha256;
     this.outputDirectory = outputDirectory;
-    this.reporter = reporter;
+    this.eventHandler = eventHandler;
     this.scheduler = Executors.newScheduledThreadPool(1);
     this.type = type;
+  }
+
+  @Nullable
+  public static Path download(Rule rule, Path outputDirectory, EventHandler eventHandler)
+      throws RepositoryFunctionException {
+    AggregatingAttributeMapper mapper = AggregatingAttributeMapper.of(rule);
+    String url = mapper.get("url", Type.STRING);
+    String sha256 = mapper.get("sha256", Type.STRING);
+    String type = mapper.has("type", Type.STRING) ? mapper.get("type", Type.STRING) : "";
+
+    try {
+      return new HttpDownloader(eventHandler, url, sha256, outputDirectory, type).download();
+    } catch (IOException e) {
+      throw new RepositoryFunctionException(new IOException("Error downloading from "
+          + url + " to " + outputDirectory + ": " + e.getMessage()),
+          SkyFunctionException.Transience.TRANSIENT);
+    }
   }
 
   /**
@@ -83,21 +112,17 @@ public class HttpDownloader {
     } catch (IOException e) {
       // Ignore error trying to hash. We'll just download again.
     }
-    int currentBytes;
-    final AtomicInteger totalBytes = new AtomicInteger(0);
+
+    AtomicInteger totalBytes = new AtomicInteger(0);
     final ScheduledFuture<?> loggerHandle = getLoggerHandle(totalBytes);
 
-    try (OutputStream outputStream = destination.getOutputStream()) {
-      ReadableByteChannel rbc = getChannel(url);
-      WritableByteChannel obc = Channels.newChannel(outputStream);
-      ByteBuffer byteBuffer = ByteBuffer.allocate(BUFFER_SIZE);
-      while ((currentBytes = rbc.read(byteBuffer)) > 0) {
-        totalBytes.addAndGet(currentBytes);
-        byteBuffer.flip();
-        while (byteBuffer.hasRemaining()) {
-          obc.write(byteBuffer);
-        }
-        byteBuffer.flip();
+    try (OutputStream out = destination.getOutputStream();
+         InputStream in = getInputStream(url)) {
+      int read;
+      byte[] buf = new byte[BUFFER_SIZE];
+      while ((read = in.read(buf)) > 0) {
+        totalBytes.addAndGet(read);
+        out.write(buf, 0, read);
       }
     } catch (IOException e) {
       throw new IOException(
@@ -136,10 +161,10 @@ public class HttpDownloader {
       @Override
       public void run() {
         try {
-          reporter.handle(Event.progress(
+          eventHandler.handle(Event.progress(
               "Downloading from " + urlString + ": " + formatSize(totalBytes.get())));
         } catch (Exception e) {
-          reporter.handle(Event.error(
+          eventHandler.handle(Event.error(
               "Error generating download progress: " + e.getMessage()));
         }
       }
@@ -159,12 +184,87 @@ public class HttpDownloader {
     return scheduler.scheduleAtFixedRate(logger, 0, 1, TimeUnit.SECONDS);
   }
 
-  @VisibleForTesting
-  protected ReadableByteChannel getChannel(URL url) throws IOException {
-    HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+  private InputStream getInputStream(URL url) throws IOException {
+    HttpURLConnection connection = (HttpURLConnection) url.openConnection(
+        createProxyIfNeeded(url.getProtocol()));
     connection.setInstanceFollowRedirects(true);
     connection.connect();
-    return Channels.newChannel(connection.getInputStream());
+    if (connection.getResponseCode() == HttpURLConnection.HTTP_OK) {
+      return connection.getInputStream();
+    }
+
+    InputStream errorStream = connection.getErrorStream();
+    throw new IOException(connection.getResponseCode() + ": "
+        + new String(ByteStreams.toByteArray(errorStream), StandardCharsets.UTF_8));
+  }
+
+  private static Proxy createProxyIfNeeded(String protocol) throws IOException {
+    if (protocol.equals("https")) {
+      return createProxy(System.getenv("HTTPS_PROXY"));
+    } else if (protocol.equals("http")) {
+      return createProxy(System.getenv("HTTP_PROXY"));
+    }
+    return Proxy.NO_PROXY;
+  }
+
+  @VisibleForTesting
+  static Proxy createProxy(String proxyAddress) throws IOException {
+    if (Strings.isNullOrEmpty(proxyAddress)) {
+      return Proxy.NO_PROXY;
+    }
+
+    // Here there be dragons.
+    Pattern urlPattern =
+        Pattern.compile("^(https?)://(?:([^:@]+?)(?::([^@]+?))?@)?(?:[^:]+)(?::(\\d+))?$");
+    Matcher matcher = urlPattern.matcher(proxyAddress);
+    if (!matcher.matches()) {
+      throw new IOException("Proxy address " + proxyAddress + " is not a valid URL");
+    }
+
+    String protocol = matcher.group(1);
+    final String username = matcher.group(2);
+    final String password = matcher.group(3);
+    String port = matcher.group(4);
+
+    boolean https;
+    switch (protocol) {
+      case "https":
+        https = true;
+        break;
+      case "http":
+        https = false;
+        break;
+      default:
+        throw new IOException("Invalid proxy protocol for " + proxyAddress);
+    }
+
+    if (username != null) {
+      if (password == null) {
+        throw new IOException("No password given for proxy " + proxyAddress);
+      }
+      System.setProperty(protocol + ".proxyUser", username);
+      System.setProperty(protocol + ".proxyPassword", password);
+
+      Authenticator.setDefault(
+          new Authenticator() {
+            public PasswordAuthentication getPasswordAuthentication() {
+              return new PasswordAuthentication(username, password.toCharArray());
+            }
+          });
+    }
+
+    if (port == null) {
+      return new Proxy(Proxy.Type.HTTP, new InetSocketAddress(proxyAddress, https ? 443 : 80));
+    }
+
+    try {
+      return new Proxy(
+          Proxy.Type.HTTP,
+          new InetSocketAddress(
+              proxyAddress.substring(0, proxyAddress.lastIndexOf(':')), Integer.parseInt(port)));
+    } catch (NumberFormatException e) {
+      throw new IOException("Error parsing proxy port: " + proxyAddress);
+    }
   }
 
   public static String getHash(Hasher hasher, Path path) throws IOException {

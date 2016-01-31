@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,11 +23,10 @@ import com.google.common.collect.Sets;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.BaseSpawn;
 import com.google.devtools.build.lib.analysis.actions.FileWriteAction;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
-import com.google.devtools.build.lib.packages.Type;
-import com.google.devtools.build.lib.syntax.Label;
-import com.google.devtools.build.lib.syntax.SkylarkCallable;
-import com.google.devtools.build.lib.syntax.SkylarkModule;
+import com.google.devtools.build.lib.syntax.Type;
+import com.google.devtools.build.lib.util.OS;
 import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.vfs.PathFragment;
 
@@ -36,6 +35,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+
+import javax.annotation.Nullable;
 
 /**
  * Provides shared functionality for parameterized command-line launching
@@ -49,9 +50,6 @@ import java.util.Map.Entry;
  *  that will contain the same commands,
  *  at which point the shell script is added to the list of inputs.
  */
-@SkylarkModule(name = "command_helper",
-    doc = "Experimental. The API will change in the future.<br>"
-    + "A helper class to create shell commands.")
 public final class CommandHelper {
 
   /**
@@ -59,9 +57,13 @@ public final class CommandHelper {
    * If the command is very long, then we write the command to a script file,
    * to avoid overflowing any limits on command-line length.
    * For short commands, we just use /bin/bash -c command.
+   *
+   * Maximum command line length on Windows is 32767[1], but for cmd.exe it is 8192[2].
+   * [1] https://msdn.microsoft.com/en-us/library/ms682425(VS.85).aspx
+   * [2] https://support.microsoft.com/en-us/kb/830473.
    */
   @VisibleForTesting
-  public static int maxCommandLength = 64000;
+  public static int maxCommandLength = OS.getCurrent() == OS.WINDOWS ? 8000 : 64000;
 
   /**
    *  A map of remote path prefixes and corresponding runfiles manifests for tools
@@ -144,12 +146,10 @@ public final class CommandHelper {
     this.labelMap = labelMapBuilder.build();
   }
 
-  @SkylarkCallable(name = "resolved_tools", doc = "Experimental.", structField = true)
   public List<Artifact> getResolvedTools() {
     return resolvedTools;
   }
 
-  @SkylarkCallable(name = "runfiles_manifests", doc = "Experimental.", structField = true)
   public ImmutableMap<PathFragment, Artifact> getRemoteRunfileManifestMap() {
     return remoteRunfileManifestMap;
   }
@@ -169,21 +169,37 @@ public final class CommandHelper {
   }
 
   /**
-   * Resolves the 'cmd' attribute, and expands known locations for $(location)
+   * Resolves a command, and expands known locations for $(location)
    * variables.
    */
-  @SkylarkCallable(doc = "Experimental.")
   public String resolveCommandAndExpandLabels(
-      Boolean supportLegacyExpansion, Boolean allowDataInLabel) {
-    String command = ruleContext.attributes().get("cmd", Type.STRING);
-    command =
-        new LocationExpander(ruleContext, labelMap, allowDataInLabel)
-            .expandAttribute("cmd", command);
-
+      String command,
+      @Nullable String attribute,
+      Boolean supportLegacyExpansion,
+      Boolean allowDataInLabel) {
+    LocationExpander expander = new LocationExpander(ruleContext, labelMap, allowDataInLabel);
+    if (attribute != null) {
+      command = expander.expandAttribute(attribute, command);
+    } else {
+      command = expander.expand(command);
+    }
     if (supportLegacyExpansion) {
       command = expandLabels(command, labelMap);
     }
     return command;
+  }
+
+  /**
+   * Resolves the 'cmd' attribute, and expands known locations for $(location)
+   * variables.
+   */
+  public String resolveCommandAndExpandLabels(
+      Boolean supportLegacyExpansion, Boolean allowDataInLabel) {
+    return resolveCommandAndExpandLabels(
+        ruleContext.attributes().get("cmd", Type.STRING),
+        "cmd",
+        supportLegacyExpansion,
+        allowDataInLabel);
   }
 
   /**
@@ -273,7 +289,6 @@ public final class CommandHelper {
    * command line is longer than the allowed maximum {@link #maxCommandLength}.
    * Fixes up the input artifact list with the created bash script when required.
    */
-  @SkylarkCallable(doc = "Experimental.")
   public List<String> buildCommandLine(
       String command, List<Artifact> inputs, String scriptPostFix) {
     Pair<List<String>, Artifact> argvAndScriptFile = buildCommandLineMaybeWithScriptFile(

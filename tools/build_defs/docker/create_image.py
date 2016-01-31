@@ -1,4 +1,4 @@
-# Copyright 2015 Google Inc. All rights reserved.
+# Copyright 2015 The Bazel Authors. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@
 import sys
 import tarfile
 
-from tools.build_defs.docker import archive
+from tools.build_defs.pkg import archive
 from third_party.py import gflags
 
 # Hardcoded docker versions that we are claiming to be.
@@ -35,7 +35,7 @@ gflags.MarkFlagAsRequired('metadata')
 gflags.DEFINE_string(
     'layer', None,
     'The tar file for the top layer of this image, mandatory.')
-gflags.MarkFlagAsRequired('metadata')
+gflags.MarkFlagAsRequired('layer')
 
 gflags.DEFINE_string(
     'id', None,

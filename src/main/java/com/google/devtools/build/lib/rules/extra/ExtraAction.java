@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,21 +14,19 @@
 
 package com.google.devtools.build.lib.rules.extra;
 
-import com.google.common.base.Preconditions;
+import com.google.common.base.Function;
 import com.google.common.base.Predicates;
 import com.google.common.collect.Collections2;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.actions.AbstractAction;
 import com.google.devtools.build.lib.actions.Action;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.ActionExecutionException;
-import com.google.devtools.build.lib.actions.ActionOwner;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ArtifactResolver;
 import com.google.devtools.build.lib.actions.DelegateSpawn;
-import com.google.devtools.build.lib.actions.ExecException;
-import com.google.devtools.build.lib.actions.Executor;
 import com.google.devtools.build.lib.actions.PackageRootResolutionException;
 import com.google.devtools.build.lib.actions.PackageRootResolver;
 import com.google.devtools.build.lib.actions.Spawn;
@@ -38,6 +36,7 @@ import com.google.devtools.build.lib.analysis.actions.SpawnAction;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
 
@@ -62,7 +61,19 @@ public final class ExtraAction extends SpawnAction {
   @GuardedBy("this")
   private boolean inputsKnown;
 
-  public ExtraAction(ActionOwner owner,
+  /**
+   * A long way to say (ExtraAction xa) -> xa.getShadowedAction().
+   */
+  public static final Function<ExtraAction, Action> GET_SHADOWED_ACTION =
+      new Function<ExtraAction, Action>() {
+        @Nullable
+        @Override
+        public Action apply(@Nullable ExtraAction extraAction) {
+          return extraAction != null ? extraAction.getShadowedAction() : null;
+        }
+      };
+
+  public ExtraAction(
       ImmutableSet<Artifact> extraActionInputs,
       Map<PathFragment, Artifact> runfilesManifests,
       Collection<Artifact> outputs,
@@ -73,7 +84,9 @@ public final class ExtraAction extends SpawnAction {
       Map<String, String> executionInfo,
       String progressMessage,
       String mnemonic) {
-    super(owner,
+    super(
+        shadowedAction.getOwner(),
+        ImmutableList.<Artifact>of(),
         createInputs(shadowedAction.getInputs(), extraActionInputs),
         outputs,
         AbstractAction.DEFAULT_RESOURCE_SET,
@@ -84,7 +97,8 @@ public final class ExtraAction extends SpawnAction {
         getManifests(shadowedAction),
         mnemonic,
         false,
-        null);
+        null,
+        false);
     this.shadowedAction = shadowedAction;
     this.runfilesManifests = ImmutableMap.copyOf(runfilesManifests);
     this.createDummyOutput = createDummyOutput;
@@ -117,16 +131,13 @@ public final class ExtraAction extends SpawnAction {
   public Collection<Artifact> discoverInputs(ActionExecutionContext actionExecutionContext)
       throws ActionExecutionException, InterruptedException {
     Preconditions.checkState(discoversInputs(), this);
-    if (getContext(actionExecutionContext.getExecutor()).isRemotable(getMnemonic(),
-        isRemotable())) {
-      // If we're running remotely, we need to update our inputs to take account of any additional
-      // inputs the shadowed action may need to do its work.
-      if (shadowedAction.discoversInputs() && shadowedAction instanceof AbstractAction) {
-        Iterable<Artifact> additionalInputs =
-            ((AbstractAction) shadowedAction).getInputFilesForExtraAction(actionExecutionContext);
-        updateInputs(createInputs(additionalInputs, extraActionInputs));
-        return ImmutableSet.copyOf(additionalInputs);
-      }
+    // We need to update our inputs to take account of any additional
+    // inputs the shadowed action may need to do its work.
+    if (shadowedAction.discoversInputs() && shadowedAction instanceof AbstractAction) {
+      Iterable<Artifact> additionalInputs =
+          ((AbstractAction) shadowedAction).getInputFilesForExtraAction(actionExecutionContext);
+      updateInputs(createInputs(additionalInputs, extraActionInputs));
+      return ImmutableSet.copyOf(additionalInputs);
     }
     return null;
   }
@@ -176,19 +187,9 @@ public final class ExtraAction extends SpawnAction {
   @Override
   public void execute(ActionExecutionContext actionExecutionContext)
       throws ActionExecutionException, InterruptedException {
-    Executor executor = actionExecutionContext.getExecutor();
-
     // PHASE 2: execution of extra_action.
 
-    if (getContext(executor).isRemotable(getMnemonic(), isRemotable())) {
-      try {
-        getContext(executor).exec(getExtraActionSpawn(), actionExecutionContext);
-      } catch (ExecException e) {
-        throw e.toActionExecutionException(this);
-      }
-    } else {
-      super.execute(actionExecutionContext);
-    }
+    super.execute(actionExecutionContext);
 
     // PHASE 3: create dummy output.
     // If the user didn't specify output, we need to create dummy output
@@ -215,7 +216,8 @@ public final class ExtraAction extends SpawnAction {
    * before the SpawnAction so should not be listed as one of its outputs.
    */
   // TODO(bazel-team): Add more tests that execute this code path!
-  private Spawn getExtraActionSpawn() {
+  @Override
+  public Spawn getSpawn() {
     final Spawn base = super.getSpawn();
     return new DelegateSpawn(base) {
       @Override public ImmutableMap<PathFragment, Artifact> getRunfilesManifests() {

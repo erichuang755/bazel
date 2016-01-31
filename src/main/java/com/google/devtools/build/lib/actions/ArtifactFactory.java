@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,6 @@
 package com.google.devtools.build.lib.actions;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableCollection;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -22,7 +21,10 @@ import com.google.common.collect.ImmutableSortedSet;
 import com.google.common.collect.Lists;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifactType;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
+import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
+import com.google.devtools.build.lib.util.Pair;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 
@@ -318,20 +320,34 @@ public class ArtifactFactory implements ArtifactResolver, ArtifactSerializer, Ar
     return createArtifactIfNotValid(findSourceRoot(execPath, baseExecPath, baseRoot), execPath);
   }
 
+  /**
+   * Probe the known packages to find the longest package prefix up until the base, or until the
+   * root directory if our execPath doesn't start with baseExecPath due to uplevel references.
+   */
   @Nullable
   private Root findSourceRoot(
       PathFragment execPath, @Nullable PathFragment baseExecPath, @Nullable Root baseRoot) {
-    // Probe the known packages to find the longest package prefix up until the base, or until the
-    // root directory if our execPath doesn't start with baseExecPath due to uplevel references.
-    PathFragment dir;
-    for (dir = execPath.getParentDirectory();
-        dir != null && !dir.equals(baseExecPath);
-        dir = dir.getParentDirectory()) {
-      Root sourceRoot = packageRoots.get(PackageIdentifier.createInDefaultRepo(dir));
+    PathFragment dir = execPath.getParentDirectory();
+    if (dir == null) {
+      return null;
+    }
+
+    RepositoryName repoName = PackageIdentifier.DEFAULT_REPOSITORY_NAME;
+
+    Pair<RepositoryName, PathFragment> repo = RepositoryName.fromPathFragment(dir);
+    if (repo != null) {
+      repoName = repo.getFirst();
+      dir = repo.getSecond();
+    }
+
+    while (dir != null && !dir.equals(baseExecPath)) {
+      Root sourceRoot = packageRoots.get(PackageIdentifier.create(repoName, dir));
       if (sourceRoot != null) {
         return sourceRoot;
       }
+      dir = dir.getParentDirectory();
     }
+
     return dir != null && dir.equals(baseExecPath) ? baseRoot : null;
   }
 
@@ -366,7 +382,7 @@ public class ArtifactFactory implements ArtifactResolver, ArtifactSerializer, Ar
         unresolvedPaths.add(execPath);
       }
     }
-    Map<PathFragment, Root> sourceRoots = resolver.findPackageRoots(unresolvedPaths);
+    Map<PathFragment, Root> sourceRoots = resolver.findPackageRootsForFiles(unresolvedPaths);
     // We are missing some dependencies. We need to rerun this method later.
     if (sourceRoots == null) {
       return null;
@@ -454,7 +470,8 @@ public class ArtifactFactory implements ArtifactResolver, ArtifactSerializer, Ar
       }
       return result;
     } else {
-      Map<PathFragment, Root> sourceRoots = resolver.findPackageRoots(Lists.newArrayList(execPath));
+      Map<PathFragment, Root> sourceRoots = resolver.findPackageRootsForFiles(
+          Lists.newArrayList(execPath));
       if (sourceRoots == null || sourceRoots.get(execPath) == null) {
         return null;
       }

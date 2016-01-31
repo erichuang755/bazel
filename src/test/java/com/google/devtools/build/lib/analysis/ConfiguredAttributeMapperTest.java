@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,15 +13,21 @@
 // limitations under the License.
 package com.google.devtools.build.lib.analysis;
 
-import static com.google.devtools.build.lib.testutil.MoreAsserts.assertSameContents;
+import static com.google.common.truth.Truth.assertThat;
+import static org.junit.Assert.assertEquals;
 
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.analysis.config.CompilationMode;
 import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.AttributeMap;
-import com.google.devtools.build.lib.packages.Type;
-import com.google.devtools.build.lib.syntax.Label;
+import com.google.devtools.build.lib.packages.BuildType;
+import com.google.devtools.build.lib.syntax.Type;
+
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.JUnit4;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -35,6 +41,7 @@ import java.util.List;
  * com.google.devtools.build.lib.analysis.select.AbstractAttributeMapperTest} to run tests common to
  * all attribute mappers.
  */
+@RunWith(JUnit4.class)
 public class ConfiguredAttributeMapperTest extends BuildViewTestCase {
 
   /**
@@ -59,6 +66,7 @@ public class ConfiguredAttributeMapperTest extends BuildViewTestCase {
    * Tests that {@link ConfiguredAttributeMapper#get} only gets the configuration-appropriate
    * value.
    */
+  @Test
   public void testGetAttribute() throws Exception {
     writeConfigRules();
     scratch.file("a/BUILD",
@@ -69,7 +77,7 @@ public class ConfiguredAttributeMapperTest extends BuildViewTestCase {
         "    cmd = select({",
         "        '//conditions:a': 'a command',",
         "        '//conditions:b': 'b command',",
-        "        '" + Type.Selector.DEFAULT_CONDITION_KEY + "': 'default command',",
+        "        '" + BuildType.Selector.DEFAULT_CONDITION_KEY + "': 'default command',",
         "    }))");
 
     useConfiguration("-c", "opt");
@@ -85,6 +93,7 @@ public class ConfiguredAttributeMapperTest extends BuildViewTestCase {
   /**
    * Tests that label visitation only travels down configuration-appropriate paths.
    */
+  @Test
   public void testLabelVisitation() throws Exception {
     writeConfigRules();
     scratch.file("a/BUILD",
@@ -94,7 +103,7 @@ public class ConfiguredAttributeMapperTest extends BuildViewTestCase {
         "    deps = select({",
         "        '//conditions:a': [':adep'],",
         "        '//conditions:b': [':bdep'],",
-        "        '" + Type.Selector.DEFAULT_CONDITION_KEY + "': [':defaultdep'],",
+        "        '" + BuildType.Selector.DEFAULT_CONDITION_KEY + "': [':defaultdep'],",
         "    }))",
         "sh_library(",
         "    name = 'adep',",
@@ -121,24 +130,27 @@ public class ConfiguredAttributeMapperTest extends BuildViewTestCase {
 
     useConfiguration("-c", "opt");
     getMapper("//a:bin").visitLabels(testVisitor);
-    assertSameContents(ImmutableList.of(binSrc, Label.parseAbsolute("//a:adep")), visitedLabels);
+    assertThat(visitedLabels)
+        .containsExactlyElementsIn(ImmutableList.of(binSrc, Label.parseAbsolute("//a:adep")));
 
     visitedLabels.clear();
     useConfiguration("-c", "dbg");
     getMapper("//a:bin").visitLabels(testVisitor);
-    assertSameContents(ImmutableList.of(binSrc, Label.parseAbsolute("//a:bdep")), visitedLabels);
+    assertThat(visitedLabels)
+        .containsExactlyElementsIn(ImmutableList.of(binSrc, Label.parseAbsolute("//a:bdep")));
 
     visitedLabels.clear();
     useConfiguration("-c", "fastbuild");
     getMapper("//a:bin").visitLabels(testVisitor);
-    assertSameContents(
-        ImmutableList.of(binSrc, Label.parseAbsolute("//a:defaultdep")), visitedLabels);
+    assertThat(visitedLabels)
+        .containsExactlyElementsIn(ImmutableList.of(binSrc, Label.parseAbsolute("//a:defaultdep")));
   }
 
   /**
    * Tests that for configurable attributes where the *values* are evaluated in different
    * configurations, the configuration checking still uses the original configuration.
    */
+  @Test
   public void testConfigurationTransitions() throws Exception {
     writeConfigRules();
     scratch.file("a/BUILD",
@@ -150,7 +162,7 @@ public class ConfiguredAttributeMapperTest extends BuildViewTestCase {
         "    tools = select({",
         "        '//conditions:a': [':adep'],",
         "        '//conditions:b': [':bdep'],",
-        "        '" + Type.Selector.DEFAULT_CONDITION_KEY + "': [':defaultdep'],",
+        "        '" + BuildType.Selector.DEFAULT_CONDITION_KEY + "': [':defaultdep'],",
         "    }))",
         "sh_binary(",
         "    name = 'adep',",
@@ -164,9 +176,8 @@ public class ConfiguredAttributeMapperTest extends BuildViewTestCase {
     useConfiguration("-c", "dbg");
 
     // Target configuration is in dbg mode, so we should match //conditions:b:
-    assertSameContents(
-        ImmutableList.of(Label.parseAbsolute("//a:bdep")),
-        getMapper("//a:gen").get("tools", Type.LABEL_LIST));
+    assertThat(getMapper("//a:gen").get("tools", BuildType.LABEL_LIST))
+        .containsExactlyElementsIn(ImmutableList.of(Label.parseAbsolute("//a:bdep")));
 
     // Verify the "tools" dep uses a different configuration that's not also in "dbg":
     assertEquals(Attribute.ConfigurationTransition.HOST,
@@ -175,6 +186,7 @@ public class ConfiguredAttributeMapperTest extends BuildViewTestCase {
     assertEquals(CompilationMode.OPT, getHostConfiguration().getCompilationMode());
   }
 
+  @Test
   public void testConcatenatedSelects() throws Exception {
     scratch.file("hello/BUILD",
         "config_setting(name = 'a', values = {'define': 'foo=a'})",
@@ -189,8 +201,9 @@ public class ConfiguredAttributeMapperTest extends BuildViewTestCase {
         "    cmd = 'nothing',",
         ")");
     useConfiguration("--define", "foo=a", "--define", "bar=d");
-    assertSameContents(
-         ImmutableList.of(Label.parseAbsolute("//hello:a.in"), Label.parseAbsolute("//hello:d.in")),
-         getMapper("//hello:gen").get("srcs", Type.LABEL_LIST));
+    assertThat(getMapper("//hello:gen").get("srcs", BuildType.LABEL_LIST))
+        .containsExactlyElementsIn(
+            ImmutableList.of(
+                Label.parseAbsolute("//hello:a.in"), Label.parseAbsolute("//hello:d.in")));
   }
 }

@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,17 +16,10 @@ package com.google.devtools.build.lib.packages;
 
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 
-/**
- * Exception indicating that a package name was invalid.
- */
+/** Exception indicating that a package name was invalid. */
 public class InvalidPackageNameException extends NoSuchPackageException {
 
   public InvalidPackageNameException(PackageIdentifier packageIdentifier, String message) {
     super(packageIdentifier, message);
-  }
-
-  public InvalidPackageNameException(
-      PackageIdentifier packageIdentifier, String message, Throwable cause) {
-    super(packageIdentifier, message, cause);
   }
 }

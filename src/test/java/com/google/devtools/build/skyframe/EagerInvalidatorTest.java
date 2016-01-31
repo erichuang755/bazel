@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,16 +23,16 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
-import com.google.common.base.Preconditions;
 import com.google.common.base.Supplier;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Sets;
 import com.google.common.testing.GcFinalization;
+import com.google.devtools.build.lib.concurrent.AbstractQueueVisitor;
 import com.google.devtools.build.lib.events.Reporter;
 import com.google.devtools.build.lib.testutil.TestUtils;
 import com.google.devtools.build.lib.util.Pair;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.skyframe.GraphTester.StringValue;
 import com.google.devtools.build.skyframe.InvalidatingNodeVisitor.DeletingNodeVisitor;
 import com.google.devtools.build.skyframe.InvalidatingNodeVisitor.DirtyingInvalidationState;
@@ -69,7 +69,7 @@ public class EagerInvalidatorTest {
   protected AtomicReference<InvalidatingNodeVisitor<?>> visitor = new AtomicReference<>();
   protected DirtyKeyTrackerImpl dirtyKeyTracker;
 
-  private IntVersion graphVersion = new IntVersion(0);
+  private IntVersion graphVersion = IntVersion.of(0);
 
   @After
   public void assertNoTrackedErrors() {
@@ -126,6 +126,10 @@ public class EagerInvalidatorTest {
     throw new UnsupportedOperationException("Sublcasses must override");
   }
 
+  protected boolean reverseDepsPresent() {
+    throw new UnsupportedOperationException("Subclasses must override");
+  }
+
   // Convenience method for eval-ing a single value.
   protected SkyValue eval(boolean keepGoing, SkyKey key) throws InterruptedException {
     SkyKey[] keys = { key };
@@ -139,7 +143,7 @@ public class EagerInvalidatorTest {
         new ParallelEvaluator(
             graph,
             graphVersion,
-            ImmutableMap.of(GraphTester.NODE_TYPE, tester.createDelegatingFunction()),
+            tester.getSkyFunctionMap(),
             reporter,
             new MemoizingEvaluator.EmittedEventState(),
             InMemoryMemoizingEvaluator.DEFAULT_STORED_EVENT_FILTER,
@@ -349,10 +353,20 @@ public class EagerInvalidatorTest {
     assertTrue(isInvalidated(skyKey("ab")));
     assertTrue(isInvalidated(skyKey("abc")));
 
-    // The reverse deps to ab and ab_c should have been removed.
-    assertThat(graph.get(skyKey("a")).getReverseDeps()).isEmpty();
-    assertThat(graph.get(skyKey("b")).getReverseDeps()).containsExactly(skyKey("bc"));
-    assertThat(graph.get(skyKey("c")).getReverseDeps()).containsExactly(skyKey("bc"));
+    // The reverse deps to ab and ab_c should have been removed if reverse deps are cleared.
+    Set<SkyKey> reverseDeps = new HashSet<>();
+    if (reverseDepsPresent()) {
+      reverseDeps.add(skyKey("ab"));
+    }
+    assertThat(graph.get(skyKey("a")).getReverseDeps()).containsExactlyElementsIn(reverseDeps);
+    reverseDeps.add(skyKey("bc"));
+    assertThat(graph.get(skyKey("b")).getReverseDeps()).containsExactlyElementsIn(reverseDeps);
+    reverseDeps.clear();
+    if (reverseDepsPresent()) {
+      reverseDeps.add(skyKey("ab_c"));
+    }
+    reverseDeps.add(skyKey("bc"));
+    assertThat(graph.get(skyKey("c")).getReverseDeps()).containsExactlyElementsIn(reverseDeps);
   }
 
   @Test
@@ -374,41 +388,43 @@ public class EagerInvalidatorTest {
     eval(/*keepGoing=*/false, parent);
     final Thread mainThread = Thread.currentThread();
     final AtomicReference<SkyKey> badKey = new AtomicReference<>();
-    EvaluationProgressReceiver receiver = new EvaluationProgressReceiver() {
-      @Override
-      public void invalidated(SkyKey skyKey, InvalidationState state) {
-        if (skyKey.equals(child)) {
-          // Interrupt on the very first invalidate
-          mainThread.interrupt();
-        } else if (!skyKey.functionName().equals(NODE_TYPE)) {
-          // All other invalidations should have the GraphTester's key type.
-          // Exceptions thrown here may be silently dropped, so keep track of errors ourselves.
-          badKey.set(skyKey);
-        }
-        try {
-          assertTrue(visitor.get().awaitInterruptionForTestingOnly(2, TimeUnit.HOURS));
-        } catch (InterruptedException e) {
-          // We may well have thrown here because by the time we try to await, the main thread is
-          // already interrupted.
-        }
-      }
+    EvaluationProgressReceiver receiver =
+        new EvaluationProgressReceiver() {
+          @Override
+          public void invalidated(SkyKey skyKey, InvalidationState state) {
+            if (skyKey.equals(child)) {
+              // Interrupt on the very first invalidate
+              mainThread.interrupt();
+            } else if (!skyKey.functionName().equals(NODE_TYPE)) {
+              // All other invalidations should have the GraphTester's key type.
+              // Exceptions thrown here may be silently dropped, so keep track of errors ourselves.
+              badKey.set(skyKey);
+            }
+            try {
+              assertTrue(
+                  visitor.get().getInterruptionLatchForTestingOnly().await(2, TimeUnit.HOURS));
+            } catch (InterruptedException e) {
+              // We may well have thrown here because by the time we try to await, the main
+              // thread is already interrupted.
+            }
+          }
 
-      @Override
-      public void enqueueing(SkyKey skyKey) {
-        throw new UnsupportedOperationException();
-      }
+          @Override
+          public void enqueueing(SkyKey skyKey) {
+            throw new UnsupportedOperationException();
+          }
 
-      @Override
-      public void computed(SkyKey skyKey, long elapsedTimeNanos) {
-        throw new UnsupportedOperationException();
-      }
+          @Override
+          public void computed(SkyKey skyKey, long elapsedTimeNanos) {
+            throw new UnsupportedOperationException();
+          }
 
-      @Override
-      public void evaluated(SkyKey skyKey, Supplier<SkyValue> skyValueSupplier,
-          EvaluationState state) {
-        throw new UnsupportedOperationException();
-      }
-    };
+          @Override
+          public void evaluated(
+              SkyKey skyKey, Supplier<SkyValue> skyValueSupplier, EvaluationState state) {
+            throw new UnsupportedOperationException();
+          }
+        };
     try {
       invalidateWithoutError(receiver, child);
       fail();
@@ -612,6 +628,11 @@ public class EagerInvalidatorTest {
       return InvalidationType.DELETED;
     }
 
+    @Override
+    protected boolean reverseDepsPresent() {
+      return false;
+    }
+
     @Test
     public void dirtyKeyTrackerWorksWithDeletingInvalidator() throws Exception {
       setupInvalidatableGraph();
@@ -620,15 +641,22 @@ public class EagerInvalidatorTest {
       // Dirty the node, and ensure that the tracker is aware of it:
       Iterable<SkyKey> diff1 = ImmutableList.of(skyKey("a"));
       InvalidationState state1 = new DirtyingInvalidationState();
-      Preconditions.checkNotNull(EagerInvalidator.createInvalidatingVisitorIfNeeded(graph, diff1,
-          receiver, state1, dirtyKeyTracker)).run();
+      Preconditions.checkNotNull(
+              EagerInvalidator.createInvalidatingVisitorIfNeeded(
+                  graph,
+                  diff1,
+                  receiver,
+                  state1,
+                  dirtyKeyTracker,
+                  AbstractQueueVisitor.EXECUTOR_FACTORY))
+          .run();
       assertThat(dirtyKeyTracker.getDirtyKeys()).containsExactly(skyKey("a"), skyKey("ab"));
 
       // Delete the node, and ensure that the tracker is no longer tracking it:
       Iterable<SkyKey> diff = ImmutableList.of(skyKey("a"));
       Preconditions.checkNotNull(EagerInvalidator.createDeletingVisitorIfNeeded(graph, diff,
           receiver, state, true, dirtyKeyTracker)).run();
-      assertThat(dirtyKeyTracker.getDirtyKeys()).containsExactly(skyKey("ab"));
+      assertThat(dirtyKeyTracker.getDirtyKeys()).isEmpty();
     }
   }
 
@@ -643,7 +671,12 @@ public class EagerInvalidatorTest {
       Iterable<SkyKey> diff = ImmutableList.copyOf(keys);
       DirtyingNodeVisitor dirtyingNodeVisitor =
           EagerInvalidator.createInvalidatingVisitorIfNeeded(
-              graph, diff, invalidationReceiver, state, dirtyKeyTracker);
+              graph,
+              diff,
+              invalidationReceiver,
+              state,
+              dirtyKeyTracker,
+              AbstractQueueVisitor.EXECUTOR_FACTORY);
       if (dirtyingNodeVisitor != null) {
         visitor.set(dirtyingNodeVisitor);
         dirtyingNodeVisitor.run();
@@ -668,6 +701,11 @@ public class EagerInvalidatorTest {
     @Override
     protected InvalidationType defaultInvalidationType() {
       return InvalidationType.CHANGED;
+    }
+
+    @Override
+    protected boolean reverseDepsPresent() {
+      return true;
     }
 
     @Test

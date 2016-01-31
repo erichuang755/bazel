@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -36,7 +36,7 @@
 // Tell the compiler that a given function never returns
 //
 #define ATTRIBUTE_NORETURN __attribute__((noreturn))
-#define ATTRIBUTE_UNUSED __attribute__ ((unused))
+#define ATTRIBUTE_UNUSED __attribute__ ((__unused__))
 
 #else  // Not GCC
 

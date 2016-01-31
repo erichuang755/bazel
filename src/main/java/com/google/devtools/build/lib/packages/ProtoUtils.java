@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,36 +14,38 @@
 
 package com.google.devtools.build.lib.packages;
 
-import static com.google.devtools.build.lib.packages.Type.BOOLEAN;
-import static com.google.devtools.build.lib.packages.Type.DISTRIBUTIONS;
-import static com.google.devtools.build.lib.packages.Type.FILESET_ENTRY_LIST;
-import static com.google.devtools.build.lib.packages.Type.INTEGER;
-import static com.google.devtools.build.lib.packages.Type.INTEGER_LIST;
-import static com.google.devtools.build.lib.packages.Type.LABEL;
-import static com.google.devtools.build.lib.packages.Type.LABEL_DICT_UNARY;
-import static com.google.devtools.build.lib.packages.Type.LABEL_LIST;
-import static com.google.devtools.build.lib.packages.Type.LABEL_LIST_DICT;
-import static com.google.devtools.build.lib.packages.Type.LICENSE;
-import static com.google.devtools.build.lib.packages.Type.NODEP_LABEL;
-import static com.google.devtools.build.lib.packages.Type.NODEP_LABEL_LIST;
-import static com.google.devtools.build.lib.packages.Type.OUTPUT;
-import static com.google.devtools.build.lib.packages.Type.OUTPUT_LIST;
-import static com.google.devtools.build.lib.packages.Type.STRING;
-import static com.google.devtools.build.lib.packages.Type.STRING_DICT;
-import static com.google.devtools.build.lib.packages.Type.STRING_DICT_UNARY;
-import static com.google.devtools.build.lib.packages.Type.STRING_LIST;
-import static com.google.devtools.build.lib.packages.Type.STRING_LIST_DICT;
-import static com.google.devtools.build.lib.packages.Type.TRISTATE;
+import static com.google.devtools.build.lib.packages.BuildType.DISTRIBUTIONS;
+import static com.google.devtools.build.lib.packages.BuildType.FILESET_ENTRY_LIST;
+import static com.google.devtools.build.lib.packages.BuildType.LABEL;
+import static com.google.devtools.build.lib.packages.BuildType.LABEL_DICT_UNARY;
+import static com.google.devtools.build.lib.packages.BuildType.LABEL_LIST;
+import static com.google.devtools.build.lib.packages.BuildType.LABEL_LIST_DICT;
+import static com.google.devtools.build.lib.packages.BuildType.LICENSE;
+import static com.google.devtools.build.lib.packages.BuildType.NODEP_LABEL;
+import static com.google.devtools.build.lib.packages.BuildType.NODEP_LABEL_LIST;
+import static com.google.devtools.build.lib.packages.BuildType.OUTPUT;
+import static com.google.devtools.build.lib.packages.BuildType.OUTPUT_LIST;
+import static com.google.devtools.build.lib.packages.BuildType.TRISTATE;
+import static com.google.devtools.build.lib.syntax.Type.BOOLEAN;
+import static com.google.devtools.build.lib.syntax.Type.INTEGER;
+import static com.google.devtools.build.lib.syntax.Type.INTEGER_LIST;
+import static com.google.devtools.build.lib.syntax.Type.STRING;
+import static com.google.devtools.build.lib.syntax.Type.STRING_DICT;
+import static com.google.devtools.build.lib.syntax.Type.STRING_DICT_UNARY;
+import static com.google.devtools.build.lib.syntax.Type.STRING_LIST;
+import static com.google.devtools.build.lib.syntax.Type.STRING_LIST_DICT;
 
 import com.google.common.base.Optional;
-import com.google.common.base.Preconditions;
 import com.google.common.base.Predicates;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSetMultimap;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Sets;
+import com.google.devtools.build.lib.query2.proto.proto2api.Build;
 import com.google.devtools.build.lib.query2.proto.proto2api.Build.Attribute.Discriminator;
+import com.google.devtools.build.lib.syntax.Type;
+import com.google.devtools.build.lib.util.Preconditions;
 
 import java.util.Set;
 
@@ -85,35 +87,54 @@ public class ProtoUtils {
           .put(STRING_DICT_UNARY, Discriminator.STRING_DICT_UNARY)
           .build();
 
-  static final ImmutableSet<Type<?>> NODEP_TYPES =
-      ImmutableSet.of(NODEP_LABEL, NODEP_LABEL_LIST);
+  static final ImmutableSet<Type<?>> NODEP_TYPES = ImmutableSet.of(NODEP_LABEL, NODEP_LABEL_LIST);
 
   static final ImmutableSetMultimap<Discriminator, Type<?>> INVERSE_TYPE_MAP =
       TYPE_MAP.asMultimap().inverse();
 
-  /**
-   * Returns the appropriate Attribute.Discriminator value from an internal attribute type.
-   */
+  /** Returns the {@link Discriminator} value corresponding to the provided {@link Type}. */
   public static Discriminator getDiscriminatorFromType(Type<?> type) {
     Preconditions.checkArgument(TYPE_MAP.containsKey(type), type);
     return TYPE_MAP.get(type);
   }
 
+  /** Returns the {@link Type} associated with an {@link Build.Attribute}. */
+  static Type<?> getTypeFromAttributePb(
+      Build.Attribute attrPb, String ruleClassName, String attrName) {
+    Optional<Boolean> nodepHint =
+        attrPb.hasNodep() ? Optional.of(attrPb.getNodep()) : Optional.<Boolean>absent();
+    Discriminator attrPbDiscriminator = attrPb.getType();
+    boolean isSelectorList = attrPbDiscriminator.equals(Discriminator.SELECTOR_LIST);
+    return getTypeFromDiscriminator(
+        isSelectorList ? attrPb.getSelectorList().getType() : attrPbDiscriminator,
+        nodepHint,
+        ruleClassName,
+        attrName);
+  }
+
   /**
-   * Returns the appropriate set of internal attribute types from an Attribute.Discriminator value.
+   * Returns the set of {@link Type}s associated with a {@link Discriminator} value.
+   *
+   * <p>The set will contain more than one {@link Type} when {@param discriminator} is either
+   * {@link Discriminator#STRING} or {@link Discriminator#STRING_LIST}, because each of them
+   * corresponds with two {@link Type} values. A nodeps hint is needed to determine which {@link
+   * Type} applies.
    */
-  public static ImmutableSet<Type<?>> getTypesFromDiscriminator(Discriminator discriminator) {
+  private static ImmutableSet<Type<?>> getTypesFromDiscriminator(Discriminator discriminator) {
     Preconditions.checkArgument(INVERSE_TYPE_MAP.containsKey(discriminator), discriminator);
     return INVERSE_TYPE_MAP.get(discriminator);
   }
 
   /**
-   * Returns the appropriate internal attribute type from an Attribute.Discriminator value, given
-   * an optional nodeps hint.
+   * Returns the {@link Type} associated with a {@link Discriminator} value, given an optional
+   * nodeps hint.
    */
-  public static Type<?> getTypeFromDiscriminator(Discriminator discriminator,
-      Optional<Boolean> nodeps, String ruleClassName, String attrName) {
-    Preconditions.checkArgument(INVERSE_TYPE_MAP.containsKey(discriminator));
+  private static Type<?> getTypeFromDiscriminator(
+      Discriminator discriminator,
+      Optional<Boolean> nodeps,
+      String ruleClassName,
+      String attrName) {
+    Preconditions.checkArgument(INVERSE_TYPE_MAP.containsKey(discriminator), discriminator);
     ImmutableSet<Type<?>> possibleTypes = ProtoUtils.getTypesFromDiscriminator(discriminator);
     Type<?> preciseType;
     if (possibleTypes.size() == 1) {

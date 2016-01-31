@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -51,8 +51,7 @@ void Redirect(const char *target_path, int fd, const char *name) {
   if (target_path != NULL && strcmp(target_path, "-") != 0) {
     int fd_out;
     const int flags = O_WRONLY | O_CREAT | O_TRUNC | O_APPEND;
-    CHECK_CALL(fd_out = open(target_path, flags, 0666),
-               "Could not open %s for redirection of %s", target_path, name);
+    CHECK_CALL(fd_out = open(target_path, flags, 0666));
     CHECK_CALL(dup2(fd_out, fd));
     CHECK_CALL(close(fd_out));
   }

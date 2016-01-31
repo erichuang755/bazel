@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -38,6 +38,7 @@ void BlazeStartupOptions::Init() {
   blaze_util::ToLower(&product);
   output_user_root = blaze_util::JoinPath(
       output_root, "_" + product + "_" + GetUserName());
+  deep_execroot = false;
   block_for_lock = true;
   host_jvm_debug = false;
   host_javabase = "";
@@ -51,6 +52,7 @@ void BlazeStartupOptions::Init() {
   max_idle_secs = testing ? 5 : (3 * 3600);
   webstatus_port = 0;
   watchfs = false;
+  invocation_policy = NULL;
 }
 
 string BlazeStartupOptions::GetHostJavabase() {
@@ -68,6 +70,7 @@ void BlazeStartupOptions::Copy(
   lhs->install_base = rhs.install_base;
   lhs->output_root = rhs.output_root;
   lhs->output_user_root = rhs.output_user_root;
+  lhs->deep_execroot = rhs.deep_execroot;
   lhs->block_for_lock = rhs.block_for_lock;
   lhs->host_jvm_debug = rhs.host_jvm_debug;
   lhs->host_jvm_profile = rhs.host_jvm_profile;
@@ -84,6 +87,7 @@ void BlazeStartupOptions::Copy(
   lhs->allow_configurable_attributes = rhs.allow_configurable_attributes;
   lhs->fatal_event_bus_exceptions = rhs.fatal_event_bus_exceptions;
   lhs->option_sources = rhs.option_sources;
+  lhs->invocation_policy = rhs.invocation_policy;
 }
 
 blaze_exit_code::ExitCode BlazeStartupOptions::ProcessArg(
@@ -107,6 +111,12 @@ blaze_exit_code::ExitCode BlazeStartupOptions::ProcessArg(
                                      "--output_user_root")) != NULL) {
     output_user_root = MakeAbsolute(value);
     option_sources["output_user_root"] = rcfile;
+  } else if (GetNullaryOption(arg, "--deep_execroot")) {
+    deep_execroot = true;
+    option_sources["deep_execroot"] = rcfile;
+  } else if (GetNullaryOption(arg, "--nodeep_execroot")) {
+    deep_execroot = false;
+    option_sources["deep_execroot"] = rcfile;
   } else if (GetNullaryOption(arg, "--noblock_for_lock")) {
     block_for_lock = false;
     option_sources["block_for_lock"] = rcfile;
@@ -124,13 +134,9 @@ blaze_exit_code::ExitCode BlazeStartupOptions::ProcessArg(
     // and re-execing.
     host_javabase = MakeAbsolute(value);
     option_sources["host_javabase"] = rcfile;
-  } else if ((value = GetUnaryOption(arg, next_arg,
-                                     "--host_jvm_args")) != NULL) {
-    if (host_jvm_args.empty()) {
-      host_jvm_args = value;
-    } else {
-      host_jvm_args = host_jvm_args + " " + value;
-    }
+  } else if ((value = GetUnaryOption(arg, next_arg, "--host_jvm_args")) !=
+             NULL) {
+    host_jvm_args.push_back(value);
     option_sources["host_jvm_args"] = rcfile;  // NB: This is incorrect
   } else if ((value = GetUnaryOption(arg, next_arg, "--blaze_cpu")) != NULL) {
     blaze_cpu = true;
@@ -227,6 +233,16 @@ blaze_exit_code::ExitCode BlazeStartupOptions::ProcessArg(
       return blaze_exit_code::BAD_ARGV;
     }
     option_sources["webstatusserver"] = rcfile;
+  } else if ((value = GetUnaryOption(arg, next_arg, "--invocation_policy"))
+              != NULL) {
+    if (invocation_policy == NULL) {
+      invocation_policy = value;
+      option_sources["invocation_policy"] = rcfile;
+    } else {
+      *error = "The startup flag --invocation_policy cannot be specified "
+          "multiple times.";
+      return blaze_exit_code::BAD_ARGV;
+    }
   } else {
     bool extra_argument_processed;
     blaze_exit_code::ExitCode process_extra_arg_exit_code = ProcessArgExtra(
@@ -236,9 +252,10 @@ blaze_exit_code::ExitCode BlazeStartupOptions::ProcessArg(
     }
     if (!extra_argument_processed) {
       blaze_util::StringPrintf(
-          error, "Unknown %s startup option: '%s'.\n"
-          "  For more info, run 'blaze help startup_options'.",
-          GetProductName().c_str(), arg);
+          error,
+          "Unknown %s startup option: '%s'.\n"
+          "  For more info, run '%s help startup_options'.",
+          GetProductName().c_str(), arg, GetProductName().c_str());
       return blaze_exit_code::BAD_ARGV;
     }
   }

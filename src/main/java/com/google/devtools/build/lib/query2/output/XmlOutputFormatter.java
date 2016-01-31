@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,8 +15,12 @@ package com.google.devtools.build.lib.query2.output;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.Attribute;
+import com.google.devtools.build.lib.packages.BuildType;
+import com.google.devtools.build.lib.packages.DependencyFilter;
 import com.google.devtools.build.lib.packages.EnvironmentGroup;
+import com.google.devtools.build.lib.packages.FilesetEntry;
 import com.google.devtools.build.lib.packages.InputFile;
 import com.google.devtools.build.lib.packages.License;
 import com.google.devtools.build.lib.packages.OutputFile;
@@ -24,17 +28,16 @@ import com.google.devtools.build.lib.packages.PackageGroup;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.query2.FakeSubincludeTarget;
+import com.google.devtools.build.lib.query2.engine.OutputFormatterCallback;
 import com.google.devtools.build.lib.query2.output.AspectResolver.BuildFileDependencyMode;
 import com.google.devtools.build.lib.query2.output.OutputFormatter.AbstractUnorderedFormatter;
-import com.google.devtools.build.lib.syntax.FilesetEntry;
-import com.google.devtools.build.lib.syntax.Label;
-import com.google.devtools.build.lib.util.BinaryPredicate;
 import com.google.devtools.build.lib.util.Pair;
 
 import org.w3c.dom.DOMException;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 
+import java.io.IOException;
 import java.io.PrintStream;
 import java.util.Collection;
 import java.util.HashSet;
@@ -56,11 +59,9 @@ import javax.xml.transform.stream.StreamResult;
  */
 class XmlOutputFormatter extends AbstractUnorderedFormatter {
 
-  private boolean xmlLineNumbers;
-  private boolean showDefaultValues;
-  private boolean relativeLocations;
+  private QueryOptions options;
   private AspectResolver aspectResolver;
-  private BinaryPredicate<Rule, Attribute> dependencyFilter;
+  private DependencyFilter dependencyFilter;
 
   @Override
   public String getName() {
@@ -68,36 +69,52 @@ class XmlOutputFormatter extends AbstractUnorderedFormatter {
   }
 
   @Override
-  public void outputUnordered(QueryOptions options, Iterable<Target> result, PrintStream out,
-      AspectResolver aspectResolver) throws InterruptedException {
-    this.xmlLineNumbers = options.xmlLineNumbers;
-    this.showDefaultValues = options.xmlShowDefaultValues;
-    this.relativeLocations = options.relativeLocations;
-    this.dependencyFilter = OutputFormatter.getDependencyFilter(options);
+  public OutputFormatterCallback<Target> createStreamCallback(QueryOptions options,
+      final PrintStream out, AspectResolver aspectResolver) {
+    this.options = options;
     this.aspectResolver = aspectResolver;
-    Document doc;
-    try {
-      DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
-      doc = factory.newDocumentBuilder().newDocument();
-    } catch (ParserConfigurationException e) {
-      // This shouldn't be possible: all the configuration is hard-coded.
-      throw new IllegalStateException("XML output failed",  e);
-    }
-    doc.setXmlVersion("1.1");
-    Element queryElem = doc.createElement("query");
-    queryElem.setAttribute("version", "2");
-    doc.appendChild(queryElem);
-    for (Target target : result) {
-      queryElem.appendChild(createTargetElement(doc, target));
-    }
-    try {
-      Transformer transformer = TransformerFactory.newInstance().newTransformer();
-      transformer.setOutputProperty(OutputKeys.INDENT, "yes");
-      transformer.transform(new DOMSource(doc), new StreamResult(out));
-    } catch (TransformerFactoryConfigurationError | TransformerException e) {
-      // This shouldn't be possible: all the configuration is hard-coded.
-      throw new IllegalStateException("XML output failed",  e);
-    }
+    this.dependencyFilter = OutputFormatter.getDependencyFilter(options);
+    return new OutputFormatterCallback<Target>() {
+
+      private Document doc;
+      private Element queryElem;
+
+
+      @Override
+      public void start() {
+        try {
+          DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+          doc = factory.newDocumentBuilder().newDocument();
+        } catch (ParserConfigurationException e) {
+          // This shouldn't be possible: all the configuration is hard-coded.
+          throw new IllegalStateException("XML output failed", e);
+        }
+        doc.setXmlVersion("1.1");
+        queryElem = doc.createElement("query");
+        queryElem.setAttribute("version", "2");
+        doc.appendChild(queryElem);
+      }
+
+      @Override
+      protected void processOutput(Iterable<Target> partialResult)
+          throws IOException, InterruptedException {
+        for (Target target : partialResult) {
+          queryElem.appendChild(createTargetElement(doc, target));
+        }
+      }
+
+      @Override
+      public void close() throws IOException {
+        try {
+          Transformer transformer = TransformerFactory.newInstance().newTransformer();
+          transformer.setOutputProperty(OutputKeys.INDENT, "yes");
+          transformer.transform(new DOMSource(doc), new StreamResult(out));
+        } catch (TransformerFactoryConfigurationError | TransformerException e) {
+          // This shouldn't be possible: all the configuration is hard-coded.
+          throw new IllegalStateException("XML output failed", e);
+        }
+      }
+    };
   }
 
   /**
@@ -110,7 +127,7 @@ class XmlOutputFormatter extends AbstractUnorderedFormatter {
    * - 'name' attribute is target's label.
    * - 'location' attribute is consistent with output of --output location.
    * - rule attributes are represented in the DOM structure.
-   * @throws InterruptedException 
+   * @throws InterruptedException
    */
   private Element createTargetElement(Document doc, Target target)
       throws InterruptedException {
@@ -119,9 +136,10 @@ class XmlOutputFormatter extends AbstractUnorderedFormatter {
       Rule rule = (Rule) target;
       elem = doc.createElement("rule");
       elem.setAttribute("class", rule.getRuleClass());
-      for (Attribute attr: rule.getAttributes()) {
-        Pair<Iterable<Object>, AttributeValueSource> values = getAttributeValues(rule, attr);
-        if (values.second == AttributeValueSource.RULE || showDefaultValues) {
+      for (Attribute attr : rule.getAttributes()) {
+        Pair<Iterable<Object>, AttributeValueSource> values =
+            getPossibleAttributeValuesAndSources(rule, attr);
+        if (values.second == AttributeValueSource.RULE || options.xmlShowDefaultValues) {
           Element attrElem = createValueElement(doc, attr.getType(), values.first);
           attrElem.setAttribute("name", attr.getName());
           elem.appendChild(attrElem);
@@ -137,7 +155,8 @@ class XmlOutputFormatter extends AbstractUnorderedFormatter {
         inputElem.setAttribute("name", label.toString());
         elem.appendChild(inputElem);
       }
-      for (Label label : aspectResolver.computeAspectDependencies(target).values()) {
+      for (Label label :
+          aspectResolver.computeAspectDependencies(target, dependencyFilter).values()) {
         Element inputElem = doc.createElement("rule-input");
         inputElem.setAttribute("name", label.toString());
         elem.appendChild(inputElem);
@@ -157,12 +176,12 @@ class XmlOutputFormatter extends AbstractUnorderedFormatter {
       elem = doc.createElement("package-group");
       elem.setAttribute("name", packageGroup.getName());
       Element includes = createValueElement(doc,
-          com.google.devtools.build.lib.packages.Type.LABEL_LIST,
+          BuildType.LABEL_LIST,
           packageGroup.getIncludes());
       includes.setAttribute("name", "includes");
       elem.appendChild(includes);
       Element packages = createValueElement(doc,
-          com.google.devtools.build.lib.packages.Type.STRING_LIST,
+          com.google.devtools.build.lib.syntax.Type.STRING_LIST,
           packageGroup.getContainedPackages());
       packages.setAttribute("name", "packages");
       elem.appendChild(packages);
@@ -188,12 +207,12 @@ class XmlOutputFormatter extends AbstractUnorderedFormatter {
       elem = doc.createElement("environment-group");
       elem.setAttribute("name", envGroup.getName());
       Element environments = createValueElement(doc,
-          com.google.devtools.build.lib.packages.Type.LABEL_LIST,
+          BuildType.LABEL_LIST,
           envGroup.getEnvironments());
       environments.setAttribute("name", "environments");
       elem.appendChild(environments);
       Element defaults = createValueElement(doc,
-          com.google.devtools.build.lib.packages.Type.LABEL_LIST,
+          BuildType.LABEL_LIST,
           envGroup.getDefaults());
       defaults.setAttribute("name", "defaults");
       elem.appendChild(defaults);
@@ -204,8 +223,8 @@ class XmlOutputFormatter extends AbstractUnorderedFormatter {
     }
 
     elem.setAttribute("name", target.getLabel().toString());
-    String location = getLocation(target, relativeLocations);
-    if (!xmlLineNumbers) {
+    String location = getLocation(target, options.relativeLocations);
+    if (!options.xmlLineNumbers) {
       int firstColon = location.indexOf(':');
       if (firstColon != -1) {
         location = location.substring(0, firstColon);
@@ -276,17 +295,17 @@ class XmlOutputFormatter extends AbstractUnorderedFormatter {
    * OutputFormatter.Type.)
    */
   private static Element createValueElement(Document doc,
-      com.google.devtools.build.lib.packages.Type<?> type, Iterable<Object> values) {
+      com.google.devtools.build.lib.syntax.Type<?> type, Iterable<Object> values) {
     // "Import static" with method scope:
-    com.google.devtools.build.lib.packages.Type<?>
-        FILESET_ENTRY = com.google.devtools.build.lib.packages.Type.FILESET_ENTRY,
-        LABEL_LIST    = com.google.devtools.build.lib.packages.Type.LABEL_LIST,
-        LICENSE       = com.google.devtools.build.lib.packages.Type.LICENSE,
-        STRING_LIST   = com.google.devtools.build.lib.packages.Type.STRING_LIST;
+    com.google.devtools.build.lib.syntax.Type<?>
+        FILESET_ENTRY = BuildType.FILESET_ENTRY,
+        LABEL_LIST    = BuildType.LABEL_LIST,
+        LICENSE       = BuildType.LICENSE,
+        STRING_LIST   = com.google.devtools.build.lib.syntax.Type.STRING_LIST;
 
     final Element elem;
     final boolean hasMultipleValues = Iterables.size(values) > 1;
-    com.google.devtools.build.lib.packages.Type<?> elemType = type.getListElementType();
+    com.google.devtools.build.lib.syntax.Type<?> elemType = type.getListElementType();
     if (elemType != null) { // it's a list (includes "distribs")
       elem = doc.createElement("list");
       for (Object value : values) {
@@ -294,11 +313,11 @@ class XmlOutputFormatter extends AbstractUnorderedFormatter {
           elem.appendChild(createValueElement(doc, elemType, elemValue));
         }
       }
-    } else if (type instanceof com.google.devtools.build.lib.packages.Type.DictType) {
+    } else if (type instanceof com.google.devtools.build.lib.syntax.Type.DictType) {
       Set<Object> visitedValues = new HashSet<>();
       elem = doc.createElement("dict");
-      com.google.devtools.build.lib.packages.Type.DictType<?, ?> dictType =
-          (com.google.devtools.build.lib.packages.Type.DictType<?, ?>) type;
+      com.google.devtools.build.lib.syntax.Type.DictType<?, ?> dictType =
+          (com.google.devtools.build.lib.syntax.Type.DictType<?, ?>) type;
       for (Object value : values) {
         for (Map.Entry<?, ?> entry : ((Map<?, ?>) value).entrySet()) {
           if (visitedValues.add(entry.getKey())) {
@@ -328,8 +347,8 @@ class XmlOutputFormatter extends AbstractUnorderedFormatter {
       // Fileset entries: not configurable.
       FilesetEntry filesetEntry = (FilesetEntry) Iterables.getOnlyElement(values);
       elem = doc.createElement("fileset-entry");
-      elem.setAttribute("srcdir",  filesetEntry.getSrcLabel().toString());
-      elem.setAttribute("destdir",  filesetEntry.getDestDir().toString());
+      elem.setAttribute("srcdir", filesetEntry.getSrcLabel().toString());
+      elem.setAttribute("destdir", filesetEntry.getDestDir().toString());
       elem.setAttribute("symlinks", filesetEntry.getSymlinkBehavior().toString());
       elem.setAttribute("strip_prefix", filesetEntry.getStripPrefix());
 
@@ -362,7 +381,7 @@ class XmlOutputFormatter extends AbstractUnorderedFormatter {
   }
 
   private static Element createValueElement(Document doc,
-        com.google.devtools.build.lib.packages.Type<?> type, Object value) {
+        com.google.devtools.build.lib.syntax.Type<?> type, Object value) {
     return createValueElement(doc, type, ImmutableList.of(value));
   }
 

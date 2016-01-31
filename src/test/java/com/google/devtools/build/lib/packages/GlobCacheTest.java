@@ -1,4 +1,4 @@
-// Copyright 2008-2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -55,7 +55,7 @@ public class GlobCacheTest {
   private GlobCache cache;
 
   @Before
-  public void setUp() throws Exception {
+  public final void createFiles() throws Exception  {
     buildFile = scratch.file("isolated/BUILD",
         "# contents don't matter in this test");
     scratch.file("isolated/sub/BUILD",
@@ -109,7 +109,7 @@ public class GlobCacheTest {
   }
 
   @After
-  public void tearDown() throws Exception {
+  public final void deleteFiles() throws Exception  {
     FileSystemUtils.deleteTreesBelow(scratch.getFileSystem().getRootDirectory());
   }
 

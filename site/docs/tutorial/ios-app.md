@@ -1,3 +1,8 @@
+---
+layout: documentation
+title: Tutorial - Build an iOS App
+---
+
 # Tutorial - Build an iOS App
 
 Like the [Android app](android-app.md) you built in the previous step, the iOS
@@ -36,9 +41,9 @@ $ vi $WORKSPACE/ios-app/BUILD
 
 ## Add an objc_library rule
 
-Bazel provides several build rules, that you can use to build an app for the
+Bazel provides several build rules that you can use to build an app for the
 iOS platform. For this tutorial, you'll first use the
-[`objc_library`](/docs/build-encyclopedia.html#objc_library) rule to tell Bazel
+[`objc_library`](/docs/be/objective-c.html#objc_library) rule to tell Bazel
 how to build an
 [static library](https://developer.apple.com/library/ios/technotes/iOSStaticLibraries/Introduction.html)
 from the app source code and Xib files. Then you'll use the
@@ -65,21 +70,38 @@ Note the name of the rule, `UrlGetClasses`.
 
 ## Add an objc_binary rule
 
-The [`objc_binary`](/docs/build-encyclopedia.html#objc_binary) rule creates the
-bundled `.ipa` archive file for the application and also generates an Xcode
-project file.
+The [`objc_binary`](/docs/be/objective-c.html#objc_binary) rule creates a
+binary to be bundled in the application.
 
 Add the following to your `BUILD` file:
 
 ```python
 objc_binary(
-    name = "ios-app",
+    name = "ios-app-binary",
     srcs = [
         "UrlGet/main.m",
     ],
     deps = [
         ":UrlGetClasses",
     ],
+)
+
+```
+Note how the `deps` attribute references the output of the
+`UrlGetClasses` rule you added to the `BUILD` file above.
+
+## Add an ios_application rule
+
+The [`ios_application`](/docs/be/objective-c.html#ios_application) rule
+creates the bundled `.ipa` archive file for the application and also generates
+an Xcode project file.
+
+Add the following to your `BUILD` file:
+
+```python
+ios_application(
+    name = "ios-app",
+    binary = ":ios-app-binary",
     infoplist = "UrlGet/UrlGet-Info.plist",
 )
 ```
@@ -87,9 +109,6 @@ objc_binary(
 Now, save and close the file. You can compare your `BUILD` file to the
 [completed example](https://github.com/bazelbuild/examples/blob/master/tutorial/ios-app/BUILD)
 in the `master` branch of the GitHub repo.
-
-Again, note how the `deps` attribute references the output of the
-`UrlGetClasses` rule you added to the `BUILD` file above.
 
 ## Run the build
 
@@ -111,7 +130,6 @@ output will appear similar to the following:
 ```bash
 INFO: Found 1 target...
 Target //ios-app:ios-app up-to-date:
-  bazel-bin/ios-app/ios-app_bin
   bazel-bin/ios-app/ios-app.ipa
   bazel-bin/ios-app/ios-app.xcodeproj/project.pbxproj
 INFO: Elapsed time: 3.765s, Critical Path: 3.44s

@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -67,7 +67,7 @@ public class LocalLinuxSandboxedStrategyTest extends LinuxSandboxedStrategyTestC
   @Test
   public void testExecutionSuccess() throws Exception {
     Spawn spawn = createSpawn("/bin/sh", "-c", "echo Hello, world.; touch dummy");
-    executor.getSpawnActionContext(spawn.getMnemonic()).exec(spawn, createContext());
+    getLinuxSandboxedStrategy().exec(spawn, createContext());
     assertThat(out()).isEqualTo("Hello, world.\n");
     assertThat(err()).isEmpty();
   }
@@ -76,7 +76,7 @@ public class LocalLinuxSandboxedStrategyTest extends LinuxSandboxedStrategyTestC
   public void testExecutionFailurePrintsCorrectMessage() throws Exception {
     Spawn spawn = createSpawn("/bin/sh", "-c", "echo ERROR >&2; exit 1");
     try {
-      executor.getSpawnActionContext(spawn.getMnemonic()).exec(spawn, createContext());
+      getLinuxSandboxedStrategy().exec(spawn, createContext());
       fail();
     } catch (UserExecException e) {
       assertThat(err()).isEqualTo("ERROR\n");

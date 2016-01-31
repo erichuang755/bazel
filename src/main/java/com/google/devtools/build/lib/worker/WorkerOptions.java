@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -28,7 +28,12 @@ public class WorkerOptions extends OptionsBase {
     defaultValue = "null",
     category = "strategy",
     help = "Enable the experimental persistent Java compiler.",
-    expansion = {"--strategy=Javac=worker", "--strategy=JavaIjar=local"}
+    expansion = {
+      "--strategy=Javac=worker",
+      "--strategy=JavaIjar=local",
+      "--strategy=JavaDeployJar=local",
+      "--strategy=JavaSourceJar=local"
+    }
   )
   public Void experimentalPersistentJavac;
 
@@ -70,7 +75,7 @@ public class WorkerOptions extends OptionsBase {
 
   @Option(
     name = "worker_verbose",
-    defaultValue = "true",
+    defaultValue = "false",
     category = "strategy",
     help = "If enabled, prints verbose messages when workers are started, shutdown, ..."
   )

@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,6 @@
 
 package com.google.devtools.build.lib.rules.test;
 
-import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
@@ -23,17 +22,20 @@ import com.google.devtools.build.lib.actions.Root;
 import com.google.devtools.build.lib.analysis.AnalysisEnvironment;
 import com.google.devtools.build.lib.analysis.FileProvider;
 import com.google.devtools.build.lib.analysis.FilesToRunProvider;
+import com.google.devtools.build.lib.analysis.PrerequisiteArtifacts;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.RunfilesSupport;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
+import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.packages.TargetUtils;
 import com.google.devtools.build.lib.packages.TestSize;
 import com.google.devtools.build.lib.packages.TestTimeout;
 import com.google.devtools.build.lib.rules.test.TestProvider.TestParams;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.common.options.EnumConverter;
 
@@ -188,9 +190,9 @@ public final class TestActionBuilder {
     NestedSetBuilder<Artifact> inputsBuilder = NestedSetBuilder.stableOrder();
     inputsBuilder.addTransitive(
         NestedSetBuilder.create(Order.STABLE_ORDER, runfilesSupport.getRunfilesMiddleman()));
-    for (TransitiveInfoCollection dep : ruleContext.getPrerequisites("$test_runtime", Mode.HOST)) {
-      inputsBuilder.addTransitive(dep.getProvider(FileProvider.class).getFilesToBuild());
-    }
+    NestedSet<Artifact> testRuntime = PrerequisiteArtifacts.nestedSet(
+        ruleContext, "$test_runtime", Mode.HOST);
+    inputsBuilder.addTransitive(testRuntime);
     TestTargetProperties testProperties = new TestTargetProperties(
         ruleContext, executionRequirements);
 
@@ -265,7 +267,7 @@ public final class TestActionBuilder {
         }
 
         env.registerAction(new TestRunnerAction(
-            ruleContext.getActionOwner(), inputs,
+            ruleContext.getActionOwner(), inputs, testRuntime,
             testLog, cacheStatus,
             coverageArtifact, microCoverageArtifact,
             testProperties, extraEnv, executionSettings,

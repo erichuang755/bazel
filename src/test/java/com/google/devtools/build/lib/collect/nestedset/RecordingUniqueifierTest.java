@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,10 +15,8 @@ package com.google.devtools.build.lib.collect.nestedset;
 
 import static org.junit.Assert.assertEquals;
 
-import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
-
-import junit.framework.TestCase;
+import com.google.devtools.build.lib.util.Preconditions;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -34,7 +32,7 @@ import java.util.Random;
  * Tests for {@link RecordingUniqueifier}.
  */
 @RunWith(JUnit4.class)
-public class RecordingUniqueifierTest extends TestCase {
+public class RecordingUniqueifierTest {
 
   private static final Random RANDOM = new Random();
   

@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -34,9 +34,9 @@ import com.google.devtools.build.lib.analysis.actions.FileWriteAction;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
-import com.google.devtools.build.lib.packages.Type;
 import com.google.devtools.build.lib.rules.RuleConfiguredTargetFactory;
 import com.google.devtools.build.lib.rules.proto.ProtoSourcesProvider;
+import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.util.FileType;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -123,7 +123,8 @@ public class ObjcProtoLibrary implements RuleConfiguredTargetFactory {
     CustomCommandLine.Builder commandLineBuilder = new CustomCommandLine.Builder()
         .add(compileProtos.getExecPathString())
         .add("--input-file-list").add(inputFileList.getExecPathString())
-        .add("--output-dir").add(workspaceRelativeOutputDir.getSafePathString());
+        .add("--output-dir").add(workspaceRelativeOutputDir.getSafePathString())
+        .add("--working-dir").add(".");
     if (optionsFile.isPresent()) {
         commandLineBuilder
             .add("--compiler-options-path")
@@ -137,7 +138,7 @@ public class ObjcProtoLibrary implements RuleConfiguredTargetFactory {
     }
 
     if (!Iterables.isEmpty(protos)) {
-      ruleContext.registerAction(ObjcRuleClasses.spawnOnDarwinActionBuilder(ruleContext)
+      ruleContext.registerAction(ObjcRuleClasses.spawnOnDarwinActionBuilder()
           .setMnemonic("GenObjcProtos")
           .addInput(compileProtos)
           .addInputs(optionsFile.asSet())
@@ -164,24 +165,24 @@ public class ObjcProtoLibrary implements RuleConfiguredTargetFactory {
     ImmutableSet.Builder<PathFragment> searchPathEntriesBuilder =
         new ImmutableSet.Builder<PathFragment>()
             .add(workspaceRelativeOutputDir);
-    boolean libPerProtoIncludes =
-         ruleContext.attributes().get(
-             ObjcProtoLibraryRule.PER_PROTO_INCLUDES, Type.BOOLEAN);
-    if (ruleContext.getFragment(ObjcConfiguration.class).perProtoIncludes()
-        || libPerProtoIncludes) {
+    if (ruleContext.attributes().get(
+        ObjcProtoLibraryRule.PER_PROTO_INCLUDES, Type.BOOLEAN)) {
       searchPathEntriesBuilder
           .add(generatedProtoDir)
           .addAll(Iterables.transform(protoGeneratedHeaders, PARENT_PATHFRAGMENT));
     }
     ImmutableSet<PathFragment> searchPathEntries = searchPathEntriesBuilder.build();
 
-    ObjcCommon common = new ObjcCommon.Builder(ruleContext)
-        .setCompilationArtifacts(compilationArtifacts)
-        .addUserHeaderSearchPaths(searchPathEntries)
-        .addDepObjcProviders(ruleContext.getPrerequisites(
-            ObjcProtoLibraryRule.LIBPROTOBUF_ATTR, Mode.TARGET, ObjcProvider.class))
-        .setIntermediateArtifacts(intermediateArtifacts)
-        .build();
+    ObjcCommon common =
+        new ObjcCommon.Builder(ruleContext)
+            .setCompilationArtifacts(compilationArtifacts)
+            .addUserHeaderSearchPaths(searchPathEntries)
+            .addDepObjcProviders(
+                ruleContext.getPrerequisites(
+                    ObjcProtoLibraryRule.LIBPROTOBUF_ATTR, Mode.TARGET, ObjcProvider.class))
+            .setIntermediateArtifacts(intermediateArtifacts)
+            .setHasModuleMap()
+            .build();
 
     NestedSetBuilder<Artifact> filesToBuild = NestedSetBuilder.<Artifact>stableOrder()
         .addAll(common.getCompiledArchive().asSet())

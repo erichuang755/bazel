@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,8 +14,8 @@
 package com.google.devtools.build.lib.bazel.rules.common;
 
 import static com.google.devtools.build.lib.packages.Attribute.attr;
-import static com.google.devtools.build.lib.packages.Type.LABEL_LIST;
-import static com.google.devtools.build.lib.packages.Type.STRING_LIST;
+import static com.google.devtools.build.lib.packages.BuildType.LABEL_LIST;
+import static com.google.devtools.build.lib.syntax.Type.STRING_LIST;
 
 import com.google.devtools.build.lib.analysis.BaseRuleClasses;
 import com.google.devtools.build.lib.analysis.RuleDefinition;
@@ -34,7 +34,6 @@ public final class BazelActionListenerRule implements RuleDefinition {
         /*<!-- #BLAZE_RULE(action_listener).ATTRIBUTE(mnemonics) -->
         A list of action mnemonics this <code>action_listener</code> should listen
         for, e.g. <code>[ "Javac" ]</code>.
-        ${SYNOPSIS}
         <p>
           Mnemonics are not a public interface.
           There's no guarantee that the mnemonics and their actions don't change.
@@ -44,7 +43,6 @@ public final class BazelActionListenerRule implements RuleDefinition {
         /*<!-- #BLAZE_RULE(action_listener).ATTRIBUTE(extra_actions) -->
         A list of <code><a href="#extra_action">extra_action</a></code> targets
         this <code>action_listener</code> should add to the build graph.
-        ${SYNOPSIS}
         E.g. <code>[ "//my/tools:analyzer" ]</code>.
         <!-- #END_BLAZE_RULE.ATTRIBUTE -->*/
         .add(attr("extra_actions", LABEL_LIST).mandatory()
@@ -74,8 +72,6 @@ public final class BazelActionListenerRule implements RuleDefinition {
   implementing an <code>action_listener</code>/<code>extra_action</code>.
 </p>
 
-${ATTRIBUTE_SIGNATURE}
-
 <p>
   An <code>action_listener</code> rule doesn't produce any output itself.
   Instead, it allows tool developers to insert
@@ -89,13 +85,11 @@ ${ATTRIBUTE_SIGNATURE}
 </p>
 
 <p>
-  By specifying the option <a href="bazel-user-manual.html#flag--experimental_action_listener">
+  By specifying the option <a href="../bazel-user-manual.html#flag--experimental_action_listener">
   <code>--experimental_action_listener=&lt;label&gt;</code></a>,
   the build will use the specified <code>action_listener</code> to insert
   <a href="#extra_action"><code>extra_action</code></a>s into the build graph.
 </p>
-
-${ATTRIBUTE_DEFINITION}
 
 <h4 id="action_listener_example">Example</h4>
 <pre>

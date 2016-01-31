@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,15 +15,15 @@
 package com.google.devtools.build.lib.skyframe;
 
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
-import com.google.devtools.build.lib.packages.ExternalPackage.Builder;
+import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.packages.Package.LegacyBuilder;
 import com.google.devtools.build.lib.packages.PackageFactory;
 import com.google.devtools.build.lib.packages.RuleClassProvider;
 import com.google.devtools.build.lib.packages.WorkspaceFactory;
-import com.google.devtools.build.lib.syntax.EvalException;
+import com.google.devtools.build.lib.skyframe.PackageFunction.PackageFunctionException;
+import com.google.devtools.build.lib.syntax.BuildFileAST;
 import com.google.devtools.build.lib.syntax.Mutability;
-import com.google.devtools.build.lib.syntax.ParserInputSource;
 import com.google.devtools.build.lib.vfs.Path;
-import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.RootedPath;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyFunctionException;
@@ -31,15 +31,13 @@ import com.google.devtools.build.skyframe.SkyFunctionException.Transience;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
 
-import java.io.IOException;
-
 /**
  * A SkyFunction to parse WORKSPACE files.
  */
 public class WorkspaceFileFunction implements SkyFunction {
 
   private final PackageFactory packageFactory;
-  private final Path installDir;
+  private final BlazeDirectories directories;
   private final RuleClassProvider ruleClassProvider;
 
   public WorkspaceFileFunction(
@@ -47,40 +45,46 @@ public class WorkspaceFileFunction implements SkyFunction {
       PackageFactory packageFactory,
       BlazeDirectories directories) {
     this.packageFactory = packageFactory;
-    this.installDir = directories.getEmbeddedBinariesRoot();
+    this.directories = directories;
     this.ruleClassProvider = ruleClassProvider;
   }
 
   @Override
   public SkyValue compute(SkyKey skyKey, Environment env) throws WorkspaceFileFunctionException,
       InterruptedException {
+
     RootedPath workspaceRoot = (RootedPath) skyKey.argument();
-    FileValue workspaceFileValue = (FileValue) env.getValue(FileValue.key(workspaceRoot));
-    if (workspaceFileValue == null) {
+    WorkspaceASTValue workspaceASTValue =
+        (WorkspaceASTValue) env.getValue(new SkyKey(SkyFunctions.WORKSPACE_AST, workspaceRoot));
+    if (workspaceASTValue == null) {
       return null;
     }
 
     Path repoWorkspace = workspaceRoot.getRoot().getRelative(workspaceRoot.getRelativePath());
-    Builder builder = new Builder(repoWorkspace,
-        packageFactory.getRuleClassProvider().getRunfilesPrefix());
+    LegacyBuilder builder =
+        com.google.devtools.build.lib.packages.Package.newExternalPackageBuilder(
+            repoWorkspace, ruleClassProvider.getRunfilesPrefix());
     try (Mutability mutability = Mutability.create("workspace %s", repoWorkspace)) {
       WorkspaceFactory parser =
           new WorkspaceFactory(
               builder,
-              packageFactory.getRuleClassProvider(),
+              ruleClassProvider,
+              packageFactory.getEnvironmentExtensions(),
               mutability,
-              installDir.getPathString());
-      parser.parse(
-          ParserInputSource.create(
-              ruleClassProvider.getDefaultWorkspaceFile(), new PathFragment("DEFAULT.WORKSPACE")));
-      if (!workspaceFileValue.exists()) {
-        return new PackageValue(builder.build());
-      }
-
+              directories.getEmbeddedBinariesRoot(),
+              directories.getWorkspace());
       try {
-        parser.parse(ParserInputSource.create(repoWorkspace, workspaceFileValue.getSize()));
-      } catch (IOException e) {
-        throw new WorkspaceFileFunctionException(e, Transience.TRANSIENT);
+        BuildFileAST ast = workspaceASTValue.getAST();
+        PackageFunction.SkylarkImportResult importResult =
+            PackageFunction.fetchImportsFromBuildFile(
+                repoWorkspace, Label.EXTERNAL_PACKAGE_IDENTIFIER, ast, env, null);
+        if (importResult != null) {
+          parser.execute(ast, importResult.importMap);
+        } else {
+          return null;
+        }
+      } catch (PackageFunctionException e) {
+        throw new WorkspaceFileFunctionException(e, Transience.PERSISTENT);
       }
     }
 
@@ -93,11 +97,11 @@ public class WorkspaceFileFunction implements SkyFunction {
   }
 
   private static final class WorkspaceFileFunctionException extends SkyFunctionException {
-    public WorkspaceFileFunctionException(IOException e, Transience transience) {
+    public WorkspaceFileFunctionException(Exception e, Transience transience) {
       super(e, transience);
     }
 
-    public WorkspaceFileFunctionException(EvalException e) {
+    public WorkspaceFileFunctionException(Exception e) {
       super(e, Transience.PERSISTENT);
     }
   }

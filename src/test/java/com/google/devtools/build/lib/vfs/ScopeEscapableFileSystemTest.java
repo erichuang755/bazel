@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,8 +22,8 @@ import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
-import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
+import com.google.devtools.build.lib.util.Preconditions;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -74,8 +74,13 @@ public abstract class ScopeEscapableFileSystemTest extends SymlinkAwareFileSyste
       return ans != null ? ans.asFragment() : null;
     }
 
-    @Override public boolean supportsModifications() { return true; }
-    @Override public boolean supportsSymbolicLinks() { return true; }
+    @Override public boolean supportsModifications() {
+      return true;
+    }
+
+    @Override public boolean supportsSymbolicLinksNatively() {
+      return true;
+    }
 
     private static RuntimeException re() {
       return new RuntimeException("This method should not be called in this context");
@@ -85,6 +90,7 @@ public abstract class ScopeEscapableFileSystemTest extends SymlinkAwareFileSyste
     @Override protected boolean isWritable(Path path) { throw re(); }
     @Override protected boolean isDirectory(Path path, boolean followSymlinks) { throw re(); }
     @Override protected boolean isFile(Path path, boolean followSymlinks) { throw re(); }
+    @Override protected boolean isSpecialFile(Path path, boolean followSymlinks) { throw re(); }
     @Override protected boolean isExecutable(Path path) { throw re(); }
     @Override protected boolean exists(Path path, boolean followSymlinks) {throw re(); }
     @Override protected boolean isSymbolicLink(Path path) { throw re(); }
@@ -120,11 +126,8 @@ public abstract class ScopeEscapableFileSystemTest extends SymlinkAwareFileSyste
   private Path dirLink;
   private PathFragment dirLinkTarget;
 
-  @Override
   @Before
-  public void setUp() throws Exception {
-    super.setUp();
-
+  public final void createLinks() throws Exception  {
     Preconditions.checkState(
         testFS instanceof ScopeEscapableFileSystem, "Not ScopeEscapable: %s", testFS);
     ((ScopeEscapableFileSystem) testFS).enableScopeChecking(false);

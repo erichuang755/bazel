@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright 2015 Google Inc. All rights reserved.
+# Copyright 2015 The Bazel Authors. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -236,10 +236,16 @@ EOF
   expect_log "Baseline: 2464526"
   # Abandon it
   abandon v2
+  # Add a commit hook to test if it is ignored
+  cat <<'EOF' >.git/hooks/commit-msg
+echo HOOK-SHOULD-BE-IGNORED >>$1
+EOF
+  chmod +x .git/hooks/commit-msg
   # Re-create release
   create v2 2464526
   expect_log "Release v2"
   expect_log "Baseline: 2464526"
+  expect_not_log "HOOK-SHOULD-BE-IGNORED"
   # Push
   push
   # Abandon it

@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,13 +14,15 @@
 package com.google.devtools.build.lib.syntax;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.events.Location;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkValue;
+import com.google.devtools.build.lib.util.Preconditions;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -40,15 +42,16 @@ import javax.annotation.Nullable;
         + "to nest other sets inside of it. Examples:<br>"
         + "<pre class=language-python>s = set([1, 2])\n"
         + "s = s | [3]           # s == {1, 2, 3}\n"
-        + "s = s | set([4, 5])   # s == {1, 2, 3, {4, 5}}</pre>"
+        + "s = s | set([4, 5])   # s == {1, 2, 3, {4, 5}}\n"
+        + "other = set([\"a\", \"b\", \"c\"], order=\"compile\")</pre>"
         + "Note that in these examples <code>{..}</code> is not a valid literal to create sets. "
         + "Sets have a fixed generic type, so <code>set([1]) + [\"a\"]</code> or "
         + "<code>set([1]) + set([\"a\"])</code> results in an error.<br>"
         + "Elements in a set can neither be mutable or be of type <code>list</code>, "
-        + "<code>map</code> or <code>dict</code>.<br>"
+        + "<code>struct</code> or <code>dict</code>.<br>"
         + "When aggregating data from providers, sets can take significantly less memory than "
         + "other types as they support nesting, that is, their subsets are shared in memory.<br>"
-        + "Every set has an <code>order</code> parameter which determines the iteration order."
+        + "Every set has an <code>order</code> parameter which determines the iteration order. "
         + "There are four possible values:"
         + "<ul><li><code>compile</code>: Defines a left-to-right post-ordering where child "
         + "elements come after those of nested sets (parent-last). For example, "
@@ -68,13 +71,13 @@ import javax.annotation.Nullable;
         + "guaranteed (<a href=\"https://github.com/bazelbuild/bazel/blob/master/src/main/java/com/google/devtools/build/lib/collect/nestedset/NaiveLinkOrderExpander.java#L26\">Example</a>)."
         + "</li></ul>"
         + "Except for <code>stable</code>, the above values are incompatible with each other. "
-        + "Consequently, two sets can only be merged via the <code>+</code> operator or via "
+        + "Consequently, two sets can only be merged via the <code>|</code> operator or via "
         + "<code>union()</code> if either both sets have the same <code>order</code> or one of "
         + "the sets has <code>stable</code> order. In the latter case the iteration order will be "
         + "determined by the outer set, thus ignoring the <code>order</code> parameter of "
         + "nested sets.")
 @Immutable
-public final class SkylarkNestedSet implements Iterable<Object> {
+public final class SkylarkNestedSet implements Iterable<Object>, SkylarkValue {
 
   private final SkylarkType contentType;
   @Nullable private final List<Object> items;
@@ -185,7 +188,7 @@ public final class SkylarkNestedSet implements Iterable<Object> {
       throw new EvalException(
           loc, String.format("sets cannot contain items of type '%s'", itemType));
     }
-    if (!EvalUtils.isSkylarkImmutable(itemType.getType())) {
+    if (!EvalUtils.isImmutable(itemType.getType())) {
       throw new EvalException(
           loc, String.format("sets cannot contain items of type '%s' (mutable type)", itemType));
     }
@@ -227,7 +230,8 @@ public final class SkylarkNestedSet implements Iterable<Object> {
   }
 
   public Collection<Object> toCollection() {
-    return ImmutableList.copyOf(set.toCollection());
+    // Do not remove <Object>: workaround for Java 7 type inference.
+    return ImmutableList.<Object>copyOf(set.toCollection());
   }
 
   public boolean isEmpty() {
@@ -246,5 +250,21 @@ public final class SkylarkNestedSet implements Iterable<Object> {
 
   public Order getOrder() {
     return set.getOrder();
+  }
+
+  @Override
+  public boolean isImmutable() {
+    return true;
+  }
+
+  @Override
+  public void write(Appendable buffer, char quotationMark) {
+    Printer.append(buffer, "set(");
+    Printer.printList(buffer, this, "[", ", ", "]", null, quotationMark);
+    Order order = getOrder();
+    if (order != Order.STABLE_ORDER) {
+      Printer.append(buffer, ", order = \"" + order.getName() + "\"");
+    }
+    Printer.append(buffer, ")");
   }
 }

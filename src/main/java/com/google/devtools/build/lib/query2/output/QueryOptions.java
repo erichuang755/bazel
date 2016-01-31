@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -214,6 +214,16 @@ public class QueryOptions extends OptionsBase {
           + "even precise mode is not completely precise: the decision whether to compute an "
           + "aspect is decided in the analysis phase, which is not run during 'blaze query'.")
   public AspectResolver.Mode aspectDeps;
+
+  @Option(
+    name = "query_file",
+    defaultValue = "",
+    category = "query",
+    help =
+        "If set, query will read the query from the file named here, rather than on the "
+            + "command line. It is an error to specify a file here as well as a command-line query."
+  )
+  public String queryFile;
 
   /**
    * Return the current options as a set of QueryEnvironment settings.

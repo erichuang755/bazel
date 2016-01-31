@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,9 +16,9 @@ package com.google.devtools.build.lib.analysis;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Function;
-import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
 import com.google.common.cache.LoadingCache;
+import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableListMultimap;
 import com.google.common.collect.ImmutableMap;
@@ -35,49 +35,47 @@ import com.google.devtools.build.lib.actions.ArtifactFactory;
 import com.google.devtools.build.lib.actions.ArtifactOwner;
 import com.google.devtools.build.lib.actions.PackageRootResolver;
 import com.google.devtools.build.lib.actions.Root;
-import com.google.devtools.build.lib.analysis.DependencyResolver.Dependency;
 import com.google.devtools.build.lib.analysis.ExtraActionArtifactsProvider.ExtraArtifactSet;
 import com.google.devtools.build.lib.analysis.config.BinTools;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildConfigurationCollection;
 import com.google.devtools.build.lib.analysis.config.ConfigMatchingProvider;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadCompatible;
-import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.events.StoredEventHandler;
-import com.google.devtools.build.lib.packages.AspectParameters;
 import com.google.devtools.build.lib.packages.Attribute;
-import com.google.devtools.build.lib.packages.NoSuchPackageException;
-import com.google.devtools.build.lib.packages.NoSuchTargetException;
+import com.google.devtools.build.lib.packages.BuildType;
+import com.google.devtools.build.lib.packages.NativeAspectClass;
 import com.google.devtools.build.lib.packages.NoSuchThingException;
 import com.google.devtools.build.lib.packages.PackageSpecification;
 import com.google.devtools.build.lib.packages.RawAttributeMapper;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.packages.TargetUtils;
-import com.google.devtools.build.lib.packages.Type;
-import com.google.devtools.build.lib.pkgcache.LoadingPhaseRunner.LoadingResult;
-import com.google.devtools.build.lib.pkgcache.PackageManager;
+import com.google.devtools.build.lib.pkgcache.LoadedPackageProvider;
+import com.google.devtools.build.lib.pkgcache.LoadingResult;
 import com.google.devtools.build.lib.rules.test.CoverageReportActionFactory;
 import com.google.devtools.build.lib.rules.test.CoverageReportActionFactory.CoverageReportActionsWrapper;
 import com.google.devtools.build.lib.rules.test.InstrumentedFilesProvider;
 import com.google.devtools.build.lib.skyframe.ActionLookupValue;
 import com.google.devtools.build.lib.skyframe.AspectValue;
-import com.google.devtools.build.lib.skyframe.AspectValue.AspectKey;
+import com.google.devtools.build.lib.skyframe.AspectValue.AspectValueKey;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetKey;
 import com.google.devtools.build.lib.skyframe.CoverageReportValue;
 import com.google.devtools.build.lib.skyframe.SkyframeAnalysisResult;
 import com.google.devtools.build.lib.skyframe.SkyframeBuildView;
 import com.google.devtools.build.lib.skyframe.SkyframeExecutor;
 import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.Label;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.util.RegexFilter;
 import com.google.devtools.build.lib.vfs.Path;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.WalkableGraph;
 import com.google.devtools.common.options.Option;
@@ -154,25 +152,25 @@ public class BuildView {
             abbrev = 'k',
             defaultValue = "false",
             category = "strategy",
-            help = "Continue as much as possible after an error.  While the "
-            + "target that failed, and those that depend on it, cannot be "
-            + "analyzed (or built), the other prerequisites of these "
-            + "targets can be analyzed (or built) all the same.")
+            help = "Continue as much as possible after an error.  While the"
+                + " target that failed, and those that depend on it, cannot be"
+                + " analyzed (or built), the other prerequisites of these"
+                + " targets can be analyzed (or built) all the same.")
     public boolean keepGoing;
 
     @Option(name = "analysis_warnings_as_errors",
             deprecationWarning = "analysis_warnings_as_errors is now a no-op and will be removed in"
-                + " an upcoming Blaze release",
+                              + " an upcoming Blaze release",
             defaultValue = "false",
             category = "strategy",
             help = "Treat visible analysis warnings as errors.")
     public boolean analysisWarningsAsErrors;
 
     @Option(name = "discard_analysis_cache",
-        defaultValue = "false",
-        category = "strategy",
-        help = "Discard the analysis cache immediately after the analysis phase completes. "
-        + "Reduces memory usage by ~10%, but makes further incremental builds slower.")
+            defaultValue = "false",
+            category = "strategy",
+            help = "Discard the analysis cache immediately after the analysis phase completes."
+                + " Reduces memory usage by ~10%, but makes further incremental builds slower.")
     public boolean discardAnalysisCache;
 
     @Option(name = "experimental_extra_action_filter",
@@ -187,6 +185,13 @@ public class BuildView {
             category = "experimental",
             help = "Only schedules extra_actions for top level targets.")
     public boolean extraActionTopLevelOnly;
+
+    @Option(name = "experimental_interleave_loading_and_analysis",
+            defaultValue = "false",
+            category = "experimental",
+            help = "Interleave loading and analysis phases, so that one target may be analyzed at"
+                + " the same time as an unrelated target is loaded.")
+    public boolean interleaveLoadingAndAnalysis;
 
     @Option(name = "version_window_for_dirty_node_gc",
             defaultValue = "0",
@@ -204,32 +209,12 @@ public class BuildView {
   private final SkyframeExecutor skyframeExecutor;
   private final SkyframeBuildView skyframeBuildView;
 
-  private final PackageManager packageManager;
-
-  private final BinTools binTools;
-
-  private BuildConfigurationCollection configurations;
-
   private final ConfiguredRuleClassProvider ruleClassProvider;
-
-  private final ArtifactFactory artifactFactory;
 
   /**
    * A factory class to create the coverage report action. May be null.
    */
   @Nullable private final CoverageReportActionFactory coverageReportActionFactory;
-
-  /**
-   * Used only for testing that we clear Skyframe caches correctly.
-   * TODO(bazel-team): Remove this once we get rid of legacy Skyframe synchronization.
-   */
-  private boolean skyframeCacheWasInvalidated = false;
-
-  /**
-   * If the last build was executed with {@code Options#discard_analysis_cache} and we are not
-   * running Skyframe full, we should clear the legacy data since it is out-of-sync.
-   */
-  private boolean skyframeAnalysisWasDiscarded = false;
 
   @VisibleForTesting
   public Set<SkyKey> getSkyframeEvaluatedTargetKeysForTesting() {
@@ -241,50 +226,15 @@ public class BuildView {
     return skyframeBuildView.getEvaluatedTargetKeys().size();
   }
 
-  /**
-   * Returns true iff Skyframe was invalidated during the analysis phase.
-   * TODO(bazel-team): Remove this once we do not need to keep legacy in sync with Skyframe.
-   */
-  @VisibleForTesting
-  boolean wasSkyframeCacheInvalidatedDuringAnalysis() {
-    return skyframeCacheWasInvalidated;
-  }
-
-  public BuildView(BlazeDirectories directories, PackageManager packageManager,
+  public BuildView(BlazeDirectories directories,
       ConfiguredRuleClassProvider ruleClassProvider,
       SkyframeExecutor skyframeExecutor,
-      BinTools binTools, CoverageReportActionFactory coverageReportActionFactory) {
+      CoverageReportActionFactory coverageReportActionFactory) {
     this.directories = directories;
-    this.packageManager = packageManager;
-    this.binTools = binTools;
     this.coverageReportActionFactory = coverageReportActionFactory;
-    this.artifactFactory = new ArtifactFactory(directories.getExecRoot());
     this.ruleClassProvider = ruleClassProvider;
     this.skyframeExecutor = Preconditions.checkNotNull(skyframeExecutor);
-    this.skyframeBuildView =
-        new SkyframeBuildView(
-            new ConfiguredTargetFactory(ruleClassProvider),
-            artifactFactory,
-            skyframeExecutor,
-            new Runnable() {
-              @Override
-              public void run() {
-                clear();
-              }
-            },
-            binTools,
-            ruleClassProvider);
-    skyframeExecutor.setSkyframeBuildView(skyframeBuildView);
-  }
-
-  /** Returns the action graph. */
-  public ActionGraph getActionGraph() {
-    return new ActionGraph() {
-        @Override
-        public Action getGeneratingAction(Artifact artifact) {
-          return skyframeExecutor.getGeneratingAction(artifact);
-        }
-      };
+    this.skyframeBuildView = skyframeExecutor.getSkyframeBuildView();
   }
 
   /**
@@ -300,135 +250,16 @@ public class BuildView {
    */
   @VisibleForTesting
   public void setConfigurationsForTesting(BuildConfigurationCollection configurations) {
-    this.configurations = configurations;
-    skyframeBuildView.setTopLevelHostConfiguration(configurations.getHostConfiguration());
-  }
-
-  public BuildConfigurationCollection getConfigurationCollection() {
-    return configurations;
-  }
-
-  /**
-   * Clear the graphs of ConfiguredTargets and Artifacts.
-   */
-  @VisibleForTesting
-  public void clear() {
-    artifactFactory.clear();
+    skyframeBuildView.setConfigurations(configurations);
   }
 
   public ArtifactFactory getArtifactFactory() {
-    return artifactFactory;
+    return skyframeBuildView.getArtifactFactory();
   }
 
   @VisibleForTesting
   WorkspaceStatusAction getLastWorkspaceBuildInfoActionForTesting() {
     return skyframeExecutor.getLastWorkspaceStatusActionForTesting();
-  }
-
-  /**
-   * Returns a corresponding ConfiguredTarget, if one exists; otherwise throws an {@link
-   * NoSuchConfiguredTargetException}.
-   */
-  @ThreadSafe
-  private ConfiguredTarget getConfiguredTarget(Target target, BuildConfiguration config)
-      throws NoSuchConfiguredTargetException {
-    ConfiguredTarget result =
-        getExistingConfiguredTarget(target.getLabel(), config);
-    if (result == null) {
-      throw new NoSuchConfiguredTargetException(target.getLabel(), config);
-    }
-    return result;
-  }
-
-  /**
-   * Obtains a {@link ConfiguredTarget} given a {@code label}, by delegating
-   * to the package cache and
-   * {@link #getConfiguredTarget(Target, BuildConfiguration)}.
-   */
-  public ConfiguredTarget getConfiguredTarget(Label label, BuildConfiguration config)
-      throws NoSuchPackageException, NoSuchTargetException, NoSuchConfiguredTargetException {
-    return getConfiguredTarget(packageManager.getLoadedTarget(label), config);
-  }
-
-  public Iterable<ConfiguredTarget> getDirectPrerequisites(ConfiguredTarget ct)
-      throws InterruptedException {
-    return getDirectPrerequisites(ct, null);
-  }
-
-  public Iterable<ConfiguredTarget> getDirectPrerequisites(
-      ConfiguredTarget ct, @Nullable final LoadingCache<Label, Target> targetCache)
-      throws InterruptedException {
-    return skyframeExecutor.getConfiguredTargets(ct.getConfiguration(),
-        getDirectPrerequisiteDependencies(ct, targetCache), false);
-  }
-
-  public Iterable<Dependency> getDirectPrerequisiteDependencies(
-      ConfiguredTarget ct, @Nullable final LoadingCache<Label, Target> targetCache)
-      throws InterruptedException {
-    if (!(ct.getTarget() instanceof Rule)) {
-      return ImmutableList.of();
-    }
-
-    class SilentDependencyResolver extends DependencyResolver {
-      @Override
-      protected void invalidVisibilityReferenceHook(TargetAndConfiguration node, Label label) {
-        // The error must have been reported already during analysis.
-      }
-
-      @Override
-      protected void invalidPackageGroupReferenceHook(TargetAndConfiguration node, Label label) {
-        // The error must have been reported already during analysis.
-      }
-
-      @Override
-      protected Target getTarget(Label label) throws NoSuchThingException {
-        if (targetCache == null) {
-          return packageManager.getLoadedTarget(label);
-        }
-
-        try {
-          return targetCache.get(label);
-        } catch (ExecutionException e) {
-          // All lookups should succeed because we should not be looking up any targets in error.
-          throw new IllegalStateException(e);
-        }
-      }
-    }
-
-    DependencyResolver dependencyResolver = new SilentDependencyResolver();
-    TargetAndConfiguration ctgNode =
-        new TargetAndConfiguration(ct.getTarget(), ct.getConfiguration());
-    return dependencyResolver.dependentNodes(ctgNode, configurations.getHostConfiguration(),
-        getConfigurableAttributeKeys(ctgNode));
-  }
-
-  /**
-   * Returns ConfigMatchingProvider instances corresponding to the configurable attribute keys
-   * present in this rule's attributes.
-   */
-  private Set<ConfigMatchingProvider> getConfigurableAttributeKeys(TargetAndConfiguration ctg) {
-    if (!(ctg.getTarget() instanceof Rule)) {
-      return ImmutableSet.of();
-    }
-    Rule rule = (Rule) ctg.getTarget();
-    ImmutableSet.Builder<ConfigMatchingProvider> keys = ImmutableSet.builder();
-    RawAttributeMapper mapper = RawAttributeMapper.of(rule);
-    for (Attribute attribute : rule.getAttributes()) {
-      for (Label label : mapper.getConfigurabilityKeys(attribute.getName(), attribute.getType())) {
-        if (Type.Selector.isReservedLabel(label)) {
-          continue;
-        }
-        try {
-          ConfiguredTarget ct = getConfiguredTarget(label, ctg.getConfiguration());
-          keys.add(Preconditions.checkNotNull(ct.getProvider(ConfigMatchingProvider.class)));
-        } catch (
-            NoSuchPackageException | NoSuchTargetException | NoSuchConfiguredTargetException e) {
-          // All lookups should succeed because we should not be looking up any targets in error.
-          throw new IllegalStateException(e);
-        }
-      }
-    }
-    return keys.build();
   }
 
   public TransitiveInfoCollection getGeneratingRule(OutputFileConfiguredTarget target) {
@@ -455,7 +286,8 @@ public class BuildView {
             ImmutableList.<Artifact>of(),
             ImmutableList.<ConfiguredTarget>of(),
             ImmutableList.<ConfiguredTarget>of(),
-            null);
+            null,
+            ImmutableMap.<PackageIdentifier, Path>of());
 
     private final ImmutableList<ConfiguredTarget> targetsToBuild;
     @Nullable private final ImmutableList<ConfiguredTarget> targetsToTest;
@@ -466,6 +298,7 @@ public class BuildView {
     private final ImmutableSet<ConfiguredTarget> exclusiveTests;
     @Nullable private final TopLevelArtifactContext topLevelContext;
     private final ImmutableList<AspectValue> aspects;
+    private final ImmutableMap<PackageIdentifier, Path> packageRoots;
 
     private AnalysisResult(
         Collection<ConfiguredTarget> targetsToBuild,
@@ -476,7 +309,8 @@ public class BuildView {
         Collection<Artifact> artifactsToBuild,
         Collection<ConfiguredTarget> parallelTests,
         Collection<ConfiguredTarget> exclusiveTests,
-        TopLevelArtifactContext topLevelContext) {
+        TopLevelArtifactContext topLevelContext,
+        ImmutableMap<PackageIdentifier, Path> packageRoots) {
       this.targetsToBuild = ImmutableList.copyOf(targetsToBuild);
       this.aspects = ImmutableList.copyOf(aspects);
       this.targetsToTest = targetsToTest == null ? null : ImmutableList.copyOf(targetsToTest);
@@ -486,6 +320,7 @@ public class BuildView {
       this.parallelTests = ImmutableSet.copyOf(parallelTests);
       this.exclusiveTests = ImmutableSet.copyOf(exclusiveTests);
       this.topLevelContext = topLevelContext;
+      this.packageRoots = packageRoots;
     }
 
     /**
@@ -493,6 +328,14 @@ public class BuildView {
      */
     public Collection<ConfiguredTarget> getTargetsToBuild() {
       return targetsToBuild;
+    }
+
+    /**
+     * The map from package names to the package root where each package was found; this is used to
+     * set up the symlink tree.
+     */
+    public ImmutableMap<PackageIdentifier, Path> getPackageRoots() {
+      return packageRoots;
     }
 
     /**
@@ -567,7 +410,8 @@ public class BuildView {
         });
   }
 
-  private void prepareToBuild(PackageRootResolver resolver) throws ViewCreationFailedException {
+  private void prepareToBuild(BuildConfigurationCollection configurations,
+      PackageRootResolver resolver) throws ViewCreationFailedException {
     for (BuildConfiguration config : configurations.getAllConfigurations()) {
       config.prepareToBuild(directories.getExecRoot(), getArtifactFactory(), resolver);
     }
@@ -581,7 +425,8 @@ public class BuildView {
       Options viewOptions,
       TopLevelArtifactContext topLevelOptions,
       EventHandler eventHandler,
-      EventBus eventBus)
+      EventBus eventBus,
+      boolean loadingEnabled)
       throws ViewCreationFailedException, InterruptedException {
     LOG.info("Starting analysis");
     pollInterruptedStatus();
@@ -591,30 +436,10 @@ public class BuildView {
     Collection<Target> targets = loadingResult.getTargets();
     eventBus.post(new AnalysisPhaseStartedEvent(targets));
 
-    skyframeCacheWasInvalidated = false;
-    // Clear all cached ConfiguredTargets on configuration change. We need to do this explicitly
-    // because we need to make sure that the legacy action graph does not contain multiple actions
-    // with different versions of the same (target/host/etc.) configuration.
-    // In the future the action graph will be probably be keyed by configurations, which should
-    // obviate the need for this workaround.
-    //
-    // Also if --discard_analysis_cache was used in the last build we want to clear the legacy
-    // data.
-    if ((this.configurations != null && !configurations.equals(this.configurations))
-        || skyframeAnalysisWasDiscarded) {
-      LOG.info("Discarding analysis cache: configurations have changed.");
+    skyframeBuildView.setConfigurations(configurations);
 
-      skyframeExecutor.dropConfiguredTargets();
-      skyframeCacheWasInvalidated = true;
-      clear();
-    }
-    skyframeAnalysisWasDiscarded = false;
-    ImmutableMap<PackageIdentifier, Path> packageRoots = loadingResult.getPackageRoots();
-    this.configurations = configurations;
-    skyframeBuildView.setTopLevelHostConfiguration(this.configurations.getHostConfiguration());
-    setArtifactRoots(packageRoots);
     // Determine the configurations.
-    List<TargetAndConfiguration> nodes = nodesForTargets(targets);
+    List<TargetAndConfiguration> nodes = nodesForTargets(configurations, targets);
 
     List<ConfiguredTargetKey> targetSpecs =
         Lists.transform(nodes, new Function<TargetAndConfiguration, ConfiguredTargetKey>() {
@@ -624,37 +449,64 @@ public class BuildView {
           }
         });
 
-    List<AspectKey> aspectKeys = new ArrayList<>();
+    List<AspectValueKey> aspectKeys = new ArrayList<>();
     for (String aspect : aspects) {
-      @SuppressWarnings("unchecked")
-      final Class<? extends ConfiguredAspectFactory> aspectFactoryClass =
-          (Class<? extends ConfiguredAspectFactory>)
-              ruleClassProvider.getAspectFactoryMap().get(aspect);
-      if (aspectFactoryClass != null) {
+
+      // Syntax: label%aspect
+      int delimiterPosition = aspect.indexOf('%');
+      if (delimiterPosition >= 0) {
+        // TODO(jfield): For consistency with Skylark loads, the aspect should be specified
+        // as an absolute path. Also, we probably need to do at least basic validation of
+        // path well-formedness here.
+        PathFragment bzlFile = new PathFragment("/" + aspect.substring(0, delimiterPosition));
+
+        String skylarkFunctionName = aspect.substring(delimiterPosition + 1);
         for (ConfiguredTargetKey targetSpec : targetSpecs) {
           aspectKeys.add(
-              AspectValue.createAspectKey(
-                  targetSpec.getLabel(), targetSpec.getConfiguration(), aspectFactoryClass));
+              AspectValue.createSkylarkAspectKey(
+                  targetSpec.getLabel(),
+                  targetSpec.getConfiguration(),
+                  bzlFile,
+                  skylarkFunctionName));
         }
       } else {
-        throw new ViewCreationFailedException("Aspect '" + aspect + "' is unknown");
+        final Class<? extends ConfiguredNativeAspectFactory> aspectFactoryClass =
+            ruleClassProvider.getAspectFactoryMap().get(aspect)
+                .asSubclass(ConfiguredNativeAspectFactory.class);
+        if (aspectFactoryClass != null) {
+          for (ConfiguredTargetKey targetSpec : targetSpecs) {
+            aspectKeys.add(
+                AspectValue.createAspectKey(
+                    targetSpec.getLabel(),
+                    targetSpec.getConfiguration(),
+                    new NativeAspectClass<ConfiguredNativeAspectFactory>(aspectFactoryClass)));
+          }
+        } else {
+          throw new ViewCreationFailedException("Aspect '" + aspect + "' is unknown");
+        }
       }
     }
 
-    prepareToBuild(new SkyframePackageRootResolver(skyframeExecutor));
+    // Configuration of some BuildConfiguration.Fragments may require information about
+    // artifactRoots, so we need to set them before calling prepareToBuild. In that case loading
+    // phase has to be enabled.
+    if (loadingEnabled) {
+      setArtifactRoots(loadingResult.getPackageRoots(), configurations);
+    }
+    prepareToBuild(configurations, new SkyframePackageRootResolver(skyframeExecutor, eventHandler));
     skyframeExecutor.injectWorkspaceStatusData();
     SkyframeAnalysisResult skyframeAnalysisResult;
     try {
       skyframeAnalysisResult =
           skyframeBuildView.configureTargets(
-              targetSpecs, aspectKeys, eventBus, viewOptions.keepGoing);
+              eventHandler, targetSpecs, aspectKeys, eventBus, viewOptions.keepGoing);
+      setArtifactRoots(skyframeAnalysisResult.getPackageRoots(), configurations);
     } finally {
       skyframeBuildView.clearInvalidatedConfiguredTargets();
     }
 
     int numTargetsToAnalyze = nodes.size();
     int numSuccessful = skyframeAnalysisResult.getConfiguredTargets().size();
-    boolean analysisSuccessful = (numSuccessful == numTargetsToAnalyze);
     if (0 < numSuccessful && numSuccessful < numTargetsToAnalyze) {
       String msg = String.format("Analysis succeeded for only %d of %d top-level targets",
                                     numSuccessful, numTargetsToAnalyze);
@@ -662,34 +514,41 @@ public class BuildView {
       LOG.info(msg);
     }
 
+    boolean analysisSuccessful = !skyframeAnalysisResult.hasError();
     AnalysisResult result =
         createResult(
+            eventHandler,
             loadingResult,
             topLevelOptions,
             viewOptions,
             skyframeAnalysisResult.getConfiguredTargets(),
             skyframeAnalysisResult.getAspects(),
             skyframeAnalysisResult.getWalkableGraph(),
+            skyframeAnalysisResult.getPackageRoots(),
             analysisSuccessful);
     LOG.info("Finished analysis");
     return result;
   }
 
   private AnalysisResult createResult(
+      EventHandler eventHandler,
       LoadingResult loadingResult,
       TopLevelArtifactContext topLevelOptions,
       BuildView.Options viewOptions,
       Collection<ConfiguredTarget> configuredTargets,
       Collection<AspectValue> aspects,
       final WalkableGraph graph,
+      ImmutableMap<PackageIdentifier, Path> packageRoots,
       boolean analysisSuccessful)
       throws InterruptedException {
     Collection<Target> testsToRun = loadingResult.getTestsToRun();
     Collection<ConfiguredTarget> allTargetsToTest = null;
     if (testsToRun != null) {
       // Determine the subset of configured targets that are meant to be run as tests.
-      allTargetsToTest = Lists.newArrayList(
-          filterTestsByTargets(configuredTargets, Sets.newHashSet(testsToRun)));
+      // Do not remove <ConfiguredTarget>: workaround for Java 7 type inference.
+      allTargetsToTest =
+          Lists.<ConfiguredTarget>newArrayList(
+              filterTestsByTargets(configuredTargets, Sets.newHashSet(testsToRun)));
     }
 
     Set<Artifact> artifactsToBuild = new HashSet<>();
@@ -697,7 +556,8 @@ public class BuildView {
     Set<ConfiguredTarget> exclusiveTests = new HashSet<>();
 
     // build-info and build-changelist.
-    Collection<Artifact> buildInfoArtifacts = skyframeExecutor.getWorkspaceStatusArtifacts();
+    Collection<Artifact> buildInfoArtifacts =
+        skyframeExecutor.getWorkspaceStatusArtifacts(eventHandler);
     Preconditions.checkState(buildInfoArtifacts.size() == 2, buildInfoArtifacts);
     artifactsToBuild.addAll(buildInfoArtifacts);
 
@@ -712,7 +572,7 @@ public class BuildView {
       actionsWrapper = coverageReportActionFactory.createCoverageReportActionsWrapper(
           allTargetsToTest,
           baselineCoverageArtifacts,
-          artifactFactory,
+          getArtifactFactory(),
           CoverageReportValue.ARTIFACT_OWNER);
       if (actionsWrapper != null) {
         ImmutableList <Action> actions = actionsWrapper.getActions();
@@ -752,7 +612,8 @@ public class BuildView {
         artifactsToBuild,
         parallelTests,
         exclusiveTests,
-        topLevelOptions);
+        topLevelOptions,
+        packageRoots);
   }
 
   private static NestedSet<Artifact> getBaselineCoverageArtifacts(
@@ -825,7 +686,8 @@ public class BuildView {
   }
 
   @VisibleForTesting
-  List<TargetAndConfiguration> nodesForTargets(Collection<Target> targets) {
+  List<TargetAndConfiguration> nodesForTargets(BuildConfigurationCollection configurations,
+      Collection<Target> targets) {
     // We use a hash set here to remove duplicate nodes; this can happen for input files and package
     // groups.
     LinkedHashSet<TargetAndConfiguration> nodes = new LinkedHashSet<>(targets.size());
@@ -839,76 +701,12 @@ public class BuildView {
   }
 
   /**
-   * Returns an existing ConfiguredTarget for the specified target and
-   * configuration, or null if none exists.  No validity check is done.
-   */
-  @ThreadSafe
-  public ConfiguredTarget getExistingConfiguredTarget(Target target, BuildConfiguration config) {
-    return getExistingConfiguredTarget(target.getLabel(), config);
-  }
-
-  /**
-   * Returns an existing ConfiguredTarget for the specified node, or null if none exists. No
-   * validity check is done.
-   */
-  @ThreadSafe
-  private ConfiguredTarget getExistingConfiguredTarget(
-      Label label, BuildConfiguration configuration) {
-    return Iterables.getFirst(
-        skyframeExecutor.getConfiguredTargets(
-            configuration, ImmutableList.of(new Dependency(label, configuration)), true),
-        null);
-  }
-
-  @VisibleForTesting
-  ListMultimap<Attribute, ConfiguredTarget> getPrerequisiteMapForTesting(ConfiguredTarget target)
-      throws InterruptedException {
-    DependencyResolver resolver = new DependencyResolver() {
-      @Override
-      protected void invalidVisibilityReferenceHook(TargetAndConfiguration node, Label label) {
-        throw new RuntimeException("bad visibility on " + label + " during testing unexpected");
-      }
-
-      @Override
-      protected void invalidPackageGroupReferenceHook(TargetAndConfiguration node, Label label) {
-        throw new RuntimeException("bad package group on " + label + " during testing unexpected");
-      }
-
-      @Override
-      protected Target getTarget(Label label) throws NoSuchThingException {
-        return packageManager.getLoadedTarget(label);
-      }
-    };
-    TargetAndConfiguration ctNode = new TargetAndConfiguration(target);
-    ListMultimap<Attribute, Dependency> depNodeNames;
-    try {
-      depNodeNames = resolver.dependentNodeMap(ctNode, configurations.getHostConfiguration(),
-          /*aspect=*/null, AspectParameters.EMPTY, getConfigurableAttributeKeys(ctNode));
-    } catch (EvalException e) {
-      throw new IllegalStateException(e);
-    }
-
-    ImmutableMap<Dependency, ConfiguredTarget> cts = skyframeExecutor.getConfiguredTargetMap(
-        ctNode.getConfiguration(), ImmutableSet.copyOf(depNodeNames.values()), false);
-
-    ImmutableListMultimap.Builder<Attribute, ConfiguredTarget> builder =
-        ImmutableListMultimap.builder();
-    for (Map.Entry<Attribute, Dependency> entry : depNodeNames.entries()) {
-      builder.put(entry.getKey(), cts.get(entry.getValue()));
-    }
-    return builder.build();
-  }
-
-  /**
-   * Sets the possible artifact roots in the artifact factory. This allows the
-   * factory to resolve paths with unknown roots to artifacts.
-   * <p>
-   * <em>Note: This must be called before any call to
-   * {@link #getConfiguredTarget(Label, BuildConfiguration)}
-   * </em>
+   * Sets the possible artifact roots in the artifact factory. This allows the factory to resolve
+   * paths with unknown roots to artifacts.
    */
   @VisibleForTesting // for BuildViewTestCase
-  public void setArtifactRoots(ImmutableMap<PackageIdentifier, Path> packageRoots) {
+  public void setArtifactRoots(ImmutableMap<PackageIdentifier, Path> packageRoots,
+      BuildConfigurationCollection configurations) {
     Map<Path, Root> rootMap = new HashMap<>();
     Map<PackageIdentifier, Root> realPackageRoots = new HashMap<>();
     for (Map.Entry<PackageIdentifier, Path> entry : packageRoots.entrySet()) {
@@ -920,7 +718,7 @@ public class BuildView {
       realPackageRoots.put(entry.getKey(), root);
     }
     // Source Artifact roots:
-    artifactFactory.setPackageRoots(realPackageRoots);
+    getArtifactFactory().setPackageRoots(realPackageRoots);
 
     // Derived Artifact roots:
     ImmutableList.Builder<Root> roots = ImmutableList.builder();
@@ -933,84 +731,7 @@ public class BuildView {
       roots.addAll(cfg.getRoots());
     }
 
-    artifactFactory.setDerivedArtifactRoots(roots.build());
-  }
-
-  /**
-   * Returns a configured target for the specified target and configuration.
-   * This should only be called from test cases, and is needed, because
-   * plain {@link #getConfiguredTarget(Target, BuildConfiguration)} does not
-   * construct the configured target graph, and would thus fail if called from
-   * outside an update.
-   */
-  @VisibleForTesting
-  public ConfiguredTarget getConfiguredTargetForTesting(Label label, BuildConfiguration config)
-      throws NoSuchPackageException, NoSuchTargetException {
-    return getConfiguredTargetForTesting(packageManager.getLoadedTarget(label), config);
-  }
-
-  @VisibleForTesting
-  public ConfiguredTarget getConfiguredTargetForTesting(Target target, BuildConfiguration config) {
-    return skyframeExecutor.getConfiguredTargetForTesting(target.getLabel(), config);
-  }
-
-  /**
-   * Returns a RuleContext which is the same as the original RuleContext of the target parameter.
-   */
-  @VisibleForTesting
-  public RuleContext getRuleContextForTesting(
-      ConfiguredTarget target, StoredEventHandler eventHandler) throws InterruptedException {
-    BuildConfiguration config = target.getConfiguration();
-    CachingAnalysisEnvironment analysisEnvironment =
-        new CachingAnalysisEnvironment(artifactFactory,
-            new ConfiguredTargetKey(target.getLabel(), config),
-            /*isSystemEnv=*/false, config.extendedSanityChecks(), eventHandler,
-            /*skyframeEnv=*/null, config.isActionsEnabled(), binTools);
-    return new RuleContext.Builder(analysisEnvironment,
-        (Rule) target.getTarget(), config, configurations.getHostConfiguration(),
-        ruleClassProvider.getPrerequisiteValidator())
-            .setVisibility(NestedSetBuilder.<PackageSpecification>create(
-                Order.STABLE_ORDER, PackageSpecification.EVERYTHING))
-            .setPrerequisites(getPrerequisiteMapForTesting(target))
-            .setConfigConditions(ImmutableSet.<ConfigMatchingProvider>of())
-            .build();
-  }
-
-  /**
-   * Creates and returns a rule context that is equivalent to the one that was used to create the
-   * given configured target.
-   */
-  @VisibleForTesting
-  public RuleContext getRuleContextForTesting(ConfiguredTarget target, AnalysisEnvironment env)
-      throws InterruptedException {
-    BuildConfiguration targetConfig = target.getConfiguration();
-    return new RuleContext.Builder(
-        env, (Rule) target.getTarget(), targetConfig, configurations.getHostConfiguration(),
-        ruleClassProvider.getPrerequisiteValidator())
-            .setVisibility(NestedSetBuilder.<PackageSpecification>create(
-                Order.STABLE_ORDER, PackageSpecification.EVERYTHING))
-            .setPrerequisites(getPrerequisiteMapForTesting(target))
-            .setConfigConditions(ImmutableSet.<ConfigMatchingProvider>of())
-            .build();
-  }
-
-  /**
-   * For a configured target dependentTarget, returns the desired configured target
-   * that is depended upon. Useful for obtaining the a target with aspects
-   * required by the dependent.
-   */
-  @VisibleForTesting
-  public ConfiguredTarget getPrerequisiteConfiguredTargetForTesting(
-      ConfiguredTarget dependentTarget, ConfiguredTarget desiredTarget)
-      throws InterruptedException {
-    Collection<ConfiguredTarget> configuredTargets =
-        getPrerequisiteMapForTesting(dependentTarget).values();
-    for (ConfiguredTarget ct : configuredTargets) {
-      if (ct.getLabel().equals(desiredTarget.getLabel())) {
-        return ct;
-      }
-    }
-    return null;
+    getArtifactFactory().setDerivedArtifactRoots(roots.build());
   }
 
   /**
@@ -1030,8 +751,256 @@ public class BuildView {
    * @see BuildView.Options#discardAnalysisCache
    */
   public void clearAnalysisCache(Collection<ConfiguredTarget> topLevelTargets) {
-    // TODO(bazel-team): Consider clearing packages too to save more memory.
-    skyframeAnalysisWasDiscarded = true;
-    skyframeExecutor.clearAnalysisCache(topLevelTargets);
+    skyframeBuildView.clearAnalysisCache(topLevelTargets);
+  }
+
+  // For ide_build_info
+  public ConfiguredTarget getConfiguredTargetForIdeInfo(
+      EventHandler eventHandler, Label label, BuildConfiguration configuration) {
+    return Iterables.getFirst(
+        skyframeExecutor.getConfiguredTargets(
+            eventHandler,
+            configuration,
+            ImmutableList.of(
+                configuration != null
+                    ? Dependency.withConfiguration(label, configuration)
+                    : Dependency.withNullConfiguration(label)),
+            true),
+        null);
+  }
+
+  public ConfiguredTarget getConfiguredTargetForIdeInfo(
+      EventHandler eventHandler, Target target, BuildConfiguration config) {
+    return getConfiguredTargetForIdeInfo(eventHandler, target.getLabel(), config);
+  }
+
+  public Iterable<ConfiguredTarget> getDirectPrerequisitesForIdeInfo(
+      EventHandler eventHandler, ConfiguredTarget ct, BuildConfigurationCollection configurations)
+          throws InterruptedException {
+    return skyframeExecutor.getConfiguredTargets(
+        eventHandler, ct.getConfiguration(),
+        getDirectPrerequisiteDependenciesForIdeInfo(eventHandler, ct, null, configurations),
+        false);
+  }
+
+  @VisibleForTesting
+  public Iterable<Dependency> getDirectPrerequisiteDependenciesForIdeInfo(
+      final EventHandler eventHandler, ConfiguredTarget ct,
+      @Nullable final LoadingCache<Label, Target> targetCache,
+      BuildConfigurationCollection configurations) throws InterruptedException {
+    if (!(ct.getTarget() instanceof Rule)) {
+      return ImmutableList.of();
+    }
+
+    class SilentDependencyResolver extends DependencyResolver {
+      @Override
+      protected void invalidVisibilityReferenceHook(TargetAndConfiguration node, Label label) {
+        // The error must have been reported already during analysis.
+      }
+
+      @Override
+      protected void invalidPackageGroupReferenceHook(TargetAndConfiguration node, Label label) {
+        // The error must have been reported already during analysis.
+      }
+
+      @Override
+      protected void missingEdgeHook(Target from, Label to, NoSuchThingException e) {
+        // The error must have been reported already during analysis.
+      }
+
+      @Override
+      protected Target getTarget(Label label) {
+        if (targetCache == null) {
+          try {
+            return LoadedPackageProvider.Bridge.getLoadedTarget(
+                skyframeExecutor.getPackageManager(), eventHandler, label);
+          } catch (NoSuchThingException e) {
+            throw new IllegalStateException(e);
+          }
+        }
+
+        try {
+          return targetCache.get(label);
+        } catch (ExecutionException e) {
+          // All lookups should succeed because we should not be looking up any targets in error.
+          throw new IllegalStateException(e);
+        }
+      }
+    }
+
+    DependencyResolver dependencyResolver = new SilentDependencyResolver();
+    TargetAndConfiguration ctgNode =
+        new TargetAndConfiguration(ct.getTarget(), ct.getConfiguration());
+    try {
+      return ImmutableSet.copyOf(dependencyResolver.dependentNodeMap(
+          ctgNode, configurations.getHostConfiguration(), /*aspect=*/ null,
+          getConfigurableAttributeKeysForTesting(eventHandler, ctgNode)).values());
+    } catch (EvalException e) {
+      throw new IllegalStateException(e);
+    }
+  }
+
+  // For testing
+  @VisibleForTesting
+  public Iterable<ConfiguredTarget> getDirectPrerequisitesForTesting(
+      EventHandler eventHandler, ConfiguredTarget ct, BuildConfigurationCollection configurations)
+          throws EvalException, InterruptedException {
+    return skyframeExecutor.getConfiguredTargets(
+        eventHandler, ct.getConfiguration(),
+        ImmutableSet.copyOf(
+            getDirectPrerequisiteDependenciesForTesting(eventHandler, ct, configurations).values()),
+        false);
+  }
+
+  @VisibleForTesting
+  public ListMultimap<Attribute, Dependency> getDirectPrerequisiteDependenciesForTesting(
+      final EventHandler eventHandler, ConfiguredTarget ct,
+      BuildConfigurationCollection configurations) throws EvalException, InterruptedException {
+    if (!(ct.getTarget() instanceof Rule)) {
+      return ArrayListMultimap.create();
+    }
+
+    class SilentDependencyResolver extends DependencyResolver {
+      @Override
+      protected void invalidVisibilityReferenceHook(TargetAndConfiguration node, Label label) {
+        throw new RuntimeException("bad visibility on " + label + " during testing unexpected");
+      }
+
+      @Override
+      protected void invalidPackageGroupReferenceHook(TargetAndConfiguration node, Label label) {
+        throw new RuntimeException("bad package group on " + label + " during testing unexpected");
+      }
+
+      @Override
+      protected void missingEdgeHook(Target from, Label to, NoSuchThingException e) {
+        throw new RuntimeException(
+            "missing dependency from " + from.getLabel() + " to " + to + ": " + e.getMessage(),
+            e);
+      }
+
+      @Override
+      protected Target getTarget(Label label) throws NoSuchThingException {
+        return LoadedPackageProvider.Bridge.getLoadedTarget(
+            skyframeExecutor.getPackageManager(), eventHandler, label);
+      }
+    }
+
+    DependencyResolver dependencyResolver = new SilentDependencyResolver();
+    TargetAndConfiguration ctgNode =
+        new TargetAndConfiguration(ct.getTarget(), ct.getConfiguration());
+    return dependencyResolver.dependentNodeMap(
+        ctgNode, configurations.getHostConfiguration(), /*aspect=*/ null,
+        getConfigurableAttributeKeysForTesting(eventHandler, ctgNode));
+  }
+
+  /**
+   * Returns ConfigMatchingProvider instances corresponding to the configurable attribute keys
+   * present in this rule's attributes.
+   */
+  private Set<ConfigMatchingProvider> getConfigurableAttributeKeysForTesting(
+      EventHandler eventHandler, TargetAndConfiguration ctg) {
+    if (!(ctg.getTarget() instanceof Rule)) {
+      return ImmutableSet.of();
+    }
+    Rule rule = (Rule) ctg.getTarget();
+    ImmutableSet.Builder<ConfigMatchingProvider> keys = ImmutableSet.builder();
+    RawAttributeMapper mapper = RawAttributeMapper.of(rule);
+    for (Attribute attribute : rule.getAttributes()) {
+      for (Label label : mapper.getConfigurabilityKeys(attribute.getName(), attribute.getType())) {
+        if (BuildType.Selector.isReservedLabel(label)) {
+          continue;
+        }
+        ConfiguredTarget ct = getConfiguredTargetForTesting(
+            eventHandler, label, ctg.getConfiguration());
+        keys.add(Preconditions.checkNotNull(ct.getProvider(ConfigMatchingProvider.class)));
+      }
+    }
+    return keys.build();
+  }
+
+  private ListMultimap<Attribute, ConfiguredTarget> getPrerequisiteMapForTesting(
+      final EventHandler eventHandler, ConfiguredTarget target,
+      BuildConfigurationCollection configurations) throws EvalException, InterruptedException {
+    ListMultimap<Attribute, Dependency> depNodeNames = getDirectPrerequisiteDependenciesForTesting(
+        eventHandler, target, configurations);
+
+    ImmutableMap<Dependency, ConfiguredTarget> cts = skyframeExecutor.getConfiguredTargetMap(
+        eventHandler,
+        target.getConfiguration(), ImmutableSet.copyOf(depNodeNames.values()), false);
+
+    ImmutableListMultimap.Builder<Attribute, ConfiguredTarget> builder =
+        ImmutableListMultimap.builder();
+    for (Map.Entry<Attribute, Dependency> entry : depNodeNames.entries()) {
+      builder.put(entry.getKey(), cts.get(entry.getValue()));
+    }
+    return builder.build();
+  }
+
+  /**
+   * Returns a configured target for the specified target and configuration. Returns {@code null}
+   * if something goes wrong.
+   */
+  @VisibleForTesting
+  public ConfiguredTarget getConfiguredTargetForTesting(
+      EventHandler eventHandler, Label label, BuildConfiguration config) {
+    return skyframeExecutor.getConfiguredTargetForTesting(eventHandler, label, config);
+  }
+
+  /**
+   * Returns a RuleContext which is the same as the original RuleContext of the target parameter.
+   */
+  @VisibleForTesting
+  public RuleContext getRuleContextForTesting(
+      ConfiguredTarget target, StoredEventHandler eventHandler,
+      BuildConfigurationCollection configurations, BinTools binTools)
+          throws EvalException, InterruptedException {
+    BuildConfiguration targetConfig = target.getConfiguration();
+    CachingAnalysisEnvironment env =
+        new CachingAnalysisEnvironment(getArtifactFactory(),
+            new ConfiguredTargetKey(target.getLabel(), targetConfig),
+            /*isSystemEnv=*/false, targetConfig.extendedSanityChecks(), eventHandler,
+            /*skyframeEnv=*/null, targetConfig.isActionsEnabled(), binTools);
+    return getRuleContextForTesting(eventHandler, target, env, configurations);
+  }
+
+  /**
+   * Creates and returns a rule context that is equivalent to the one that was used to create the
+   * given configured target.
+   */
+  @VisibleForTesting
+  public RuleContext getRuleContextForTesting(EventHandler eventHandler, ConfiguredTarget target,
+      AnalysisEnvironment env, BuildConfigurationCollection configurations)
+          throws EvalException, InterruptedException {
+    BuildConfiguration targetConfig = target.getConfiguration();
+    return new RuleContext.Builder(
+        env, (Rule) target.getTarget(), null, targetConfig, configurations.getHostConfiguration(),
+        ruleClassProvider.getPrerequisiteValidator(),
+        ((Rule) target.getTarget()).getRuleClassObject().getConfigurationFragmentPolicy())
+            .setVisibility(NestedSetBuilder.<PackageSpecification>create(
+                Order.STABLE_ORDER, PackageSpecification.EVERYTHING))
+            .setPrerequisites(getPrerequisiteMapForTesting(eventHandler, target, configurations))
+            .setConfigConditions(ImmutableSet.<ConfigMatchingProvider>of())
+            .setUniversalFragment(ruleClassProvider.getUniversalFragment())
+            .build();
+  }
+
+  /**
+   * For a configured target dependentTarget, returns the desired configured target
+   * that is depended upon. Useful for obtaining the a target with aspects
+   * required by the dependent.
+   */
+  @VisibleForTesting
+  public ConfiguredTarget getPrerequisiteConfiguredTargetForTesting(
+      EventHandler eventHandler, ConfiguredTarget dependentTarget, Label desiredTarget,
+      BuildConfigurationCollection configurations)
+      throws EvalException, InterruptedException {
+    Collection<ConfiguredTarget> configuredTargets =
+        getPrerequisiteMapForTesting(eventHandler, dependentTarget, configurations).values();
+    for (ConfiguredTarget ct : configuredTargets) {
+      if (ct.getLabel().equals(desiredTarget)) {
+        return ct;
+      }
+    }
+    return null;
   }
 }

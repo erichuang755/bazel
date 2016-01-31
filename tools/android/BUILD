@@ -36,6 +36,29 @@ sh_binary(
     data = ["//src/tools/android/java/com/google/devtools/build/android/ziputils:mapper"],
 )
 
+sh_binary(
+    name = "IdlClass",
+    srcs = ["idlclass.sh"],
+    data = ["//src/tools/android/java/com/google/devtools/build/android/idlclass:IdlClass"],
+)
+
+filegroup(
+    name = "package_parser",
+    srcs = ["//src/tools/android/java/com/google/devtools/build/android/ideinfo:PackageParser_deploy.jar"],
+)
+
+java_binary(
+    name = "PackageParser",
+    main_class = "com.google.devtools.build.android.ideinfo.PackageParser",
+    visibility = ["//visibility:public"],
+    runtime_deps = [":package_parser_import"],
+)
+
+java_import(
+    name = "package_parser_import",
+    jars = [":package_parser"],
+)
+
 py_binary(
     name = "merge_manifests",
     srcs = [
@@ -51,25 +74,6 @@ py_test(
     name = "merge_manifests_test",
     srcs = ["merge_manifests_test.py"],
     deps = [":merge_manifests"],
-)
-
-py_binary(
-    name = "proguard_whitelister",
-    srcs = [
-        "proguard_whitelister.py",
-    ],
-    deps = [
-        "//third_party/py/gflags",
-    ],
-)
-
-py_test(
-    name = "proguard_whitelister_test",
-    srcs = ["proguard_whitelister_test.py"],
-    data = ["proguard_whitelister_input.cfg"],
-    deps = [
-        ":proguard_whitelister",
-    ],
 )
 
 py_binary(

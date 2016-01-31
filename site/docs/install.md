@@ -1,5 +1,6 @@
 ---
 layout: documentation
+title: Installing Bazel
 ---
 
 # Installing Bazel
@@ -8,21 +9,35 @@ layout: documentation
 
 Supported platforms:
 
-*   Ubuntu Linux (Utopic 14.10 and Trusty 14.04 LTS)
+*   Ubuntu Linux (Wily 15.10 and Trusty 14.04 LTS)
 *   Mac OS X
 
 Java:
 
-*   Java JDK 7 or later
+*   Java JDK 8 or later ([JDK 7](#jdk7) is still supported
+    but deprecated).
 
 ## Install dependencies
 
 ### Ubuntu
 
-#### 1. Install OpenJDK 7
+#### 1. Install JDK 8
+
+**Ubuntu Trusty (14.04 LTS).** OpenJDK 8 is not available on Trusty. To
+install Oracle JDK 8:
 
 ```
-$ sudo apt-get install openjdk-7-jdk openjdk-7-source
+$ sudo add-apt-repository ppa:webupd8team/java
+$ sudo apt-get update
+$ sudo apt-get install oracle-java8-installer
+```
+
+Note: You might need to `sudo apt-get install software-properties-common` if you don't have the `add-apt-repository` command. See [here](http://manpages.ubuntu.com/manpages/wily/man1/add-apt-repository.1.html).
+
+**Ubuntu Wily (15.10).** To install OpenJDK 8:
+
+```
+$ sudo apt-get install openjdk-8-jdk
 ```
 
 #### 2. Install required packages
@@ -33,10 +48,10 @@ $ sudo apt-get install pkg-config zip g++ zlib1g-dev unzip
 
 ### Mac OS X
 
-#### 1. Install JDK 7
+#### 1. Install JDK 8
 
-JDK 7 can be downloaded from
-[Oracle's JDK Page](http://www.oracle.com/technetwork/java/javase/downloads/jdk7-downloads-1880260.html).
+JDK 8 can be downloaded from
+[Oracle's JDK Page](http://www.oracle.com/technetwork/java/javase/downloads/jdk8-downloads-2133151.html).
 Look for "Mac OS X x64" under "Java SE Development Kit". This will download a
 DMG image with an install wizard.
 
@@ -66,8 +81,8 @@ your operating system.
 Run the installer:
 
 <pre>
-$ chmod +x install-<em>version</em>-<em>os</em>.sh
-$ ./install-<em>version</em>-<em>os</em>.sh --user
+$ chmod +x bazel-<em>version</em>-installer-<em>os</em>.sh
+$ ./bazel-<em>version</em>-installer-<em>os</em>.sh --user
 </pre>
 
 The `--user` flag installs Bazel to the `$HOME/bin` directory on your
@@ -85,6 +100,14 @@ $ export PATH="$PATH:$HOME/bin"
 ```
 
 You can also add this command to your `~/.bashrc` file.
+
+## <a name="jdk7"></a>Using Bazel with JDK 7 (deprecated)
+
+Bazel version _0.1.0_ runs without any change with JDK 7. However, future
+version will stop supporting JDK 7 when our CI cannot build for it anymore.
+The installer for JDK 7 for Bazel versions after _0.1.0_ is labeled
+`./install-<em>version</em>-<em>os</em>-<b>jdk7</b>.sh`. If you wish to use JDK
+7, follow the same steps as for JDK 8 but with the _jdk7_ installer.
 
 ### Getting bash completion
 
@@ -117,6 +140,7 @@ Bazel also comes with a zsh completion script. To install it:
     zstyle ':completion:*' use-cache on
     zstyle ':completion:*' cache-path ~/.zsh/cache
     ```
+
 ## Compiling from source
 
 If you would like to build Bazel from source, clone the source from GitHub and

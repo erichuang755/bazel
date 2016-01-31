@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,20 +14,29 @@
 package com.google.devtools.build.lib.vfs;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Preconditions;
+import com.google.common.base.Throwables;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import com.google.devtools.build.lib.profiler.Profiler;
 import com.google.devtools.build.lib.profiler.ProfilerTask;
 import com.google.devtools.build.lib.unix.ErrnoFileStatus;
-import com.google.devtools.build.lib.unix.FilesystemUtils;
-import com.google.devtools.build.lib.unix.FilesystemUtils.Dirents;
-import com.google.devtools.build.lib.unix.FilesystemUtils.ReadTypes;
+import com.google.devtools.build.lib.unix.NativePosixFiles;
+import com.google.devtools.build.lib.unix.NativePosixFiles.Dirents;
+import com.google.devtools.build.lib.unix.NativePosixFiles.ReadTypes;
+import com.google.devtools.build.lib.util.Preconditions;
 
 import java.io.IOException;
+import java.io.RandomAccessFile;
+import java.nio.ByteBuffer;
+import java.nio.CharBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
+import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Random;
 
 /**
  * This class implements the FileSystem interface using direct calls to the
@@ -35,9 +44,84 @@ import java.util.List;
  */
 // Not final only for testing.
 @ThreadSafe
-public class UnixFileSystem extends AbstractFileSystem {
+public class UnixFileSystem extends AbstractFileSystemWithCustomStat {
+  /**
+   * What to do with requests to create symbolic links.
+   *
+   * Currently supports one value: SYMLINK, which simply calls symlink() . It obviously does not
+   * work on Windows.
+   */
+  public enum SymlinkStrategy {
+    /**
+     * Use symlink(). Does not work on Windows, obviously.
+     */
+    SYMLINK,
 
-  public static final UnixFileSystem INSTANCE = new UnixFileSystem();
+    /**
+     * Write a log message for symlinks that won't be compatible with how we are planning to pretend
+     * that they exist on Windows.
+     *
+     * <p>The current plan for emulating symlinks on Windows is that in order to create a "symlink",
+     * the target needs to exist, that is, we don't do dangling symlinks. Then:
+     * </p>
+     *
+     * <ul>
+     *   <li>If the target is a directory, we create a junction. This is good because we don't need
+     *   write access to the target and it Just Works. The link and its target can be on different
+     *   file systems, which is important, because contrary to the popular belief, *can* do a
+     *   mount() on Windows
+     *   </li>
+     *   <li>If the target is a file in the source tree or under the output base, we use a hard
+     *   link. Hard links only work within the same file system and you need write access to the
+     *   target. We assume that the source tree is writable, and we know that the output base is.
+     *   </li>
+     *   <li>If the target is a file not in one of these locations, we raise an error. The only
+     *   places where we need to do this is in the implementation of local repository rules,
+     *   which will be special-cased.</li>
+     * </ul>
+     *
+     * <p>What does <b>not</b> work is using symbolic links: they need local administrator rights,
+     * which would make Bazel only usable as local admin.
+     * </p>
+     */
+    WINDOWS_COMPATIBLE,
+  }
+
+  private final SymlinkStrategy symlinkStrategy;
+  private final String symlinkLogFile;
+
+  /**
+   * Directories where Bazel tries to hardlink files from instead of copying them.
+   *
+   * <p>These must be writable to the user.
+   */
+  private ImmutableList<Path> rootsWithAllowedHardlinks;
+
+  public UnixFileSystem() {
+    SymlinkStrategy symlinkStrategy = SymlinkStrategy.SYMLINK;
+    String strategyString = System.getProperty("io.bazel.SymlinkStrategy");
+    symlinkLogFile = System.getProperty("io.bazel.SymlinkLogFile");
+    if (strategyString != null) {
+      try {
+        symlinkStrategy = SymlinkStrategy.valueOf(strategyString.toUpperCase());
+      } catch (IllegalArgumentException e) {
+        // We just go with the default, this is just an experimental option so it's fine.
+      }
+
+      if (symlinkLogFile != null) {
+        writeLogMessage("Logging started");
+      }
+    }
+
+    this.symlinkStrategy = symlinkStrategy;
+    rootsWithAllowedHardlinks = ImmutableList.of();
+  }
+
+  // This method is a little ugly, but it's only for testing for now.
+  public void setRootsWithAllowedHardlinks(Iterable<Path> roots) {
+    this.rootsWithAllowedHardlinks = ImmutableList.copyOf(roots);
+  }
+
   /**
    * Eager implementation of FileStatus for file systems that have an atomic
    * stat(2) syscall. A proxy for {@link com.google.devtools.build.lib.unix.FileStatus}.
@@ -61,6 +145,9 @@ public class UnixFileSystem extends AbstractFileSystem {
 
     @Override
     public boolean isSymbolicLink() { return status.isSymbolicLink(); }
+
+    @Override
+    public boolean isSpecialFile() { return isFile() && !status.isRegularFile(); }
 
     @Override
     public long getSize() { return status.getSize(); }
@@ -96,7 +183,7 @@ public class UnixFileSystem extends AbstractFileSystem {
     String[] entries;
     long startTime = Profiler.nanoTimeMaybe();
     try {
-      entries = FilesystemUtils.readdir(name);
+      entries = NativePosixFiles.readdir(name);
     } finally {
       profiler.logSimpleTask(startTime, ProfilerTask.VFS_DIR, name);
     }
@@ -117,7 +204,7 @@ public class UnixFileSystem extends AbstractFileSystem {
   }
 
   /**
-   * Converts from {@link com.google.devtools.build.lib.unix.FilesystemUtils.Dirents.Type} to
+   * Converts from {@link NativePosixFiles.Dirents.Type} to
    * {@link com.google.devtools.build.lib.vfs.Dirent.Type}.
    */
   private static Dirent.Type convertToDirentType(Dirents.Type type) {
@@ -140,7 +227,7 @@ public class UnixFileSystem extends AbstractFileSystem {
     String name = path.getPathString();
     long startTime = Profiler.nanoTimeMaybe();
     try {
-      Dirents unixDirents = FilesystemUtils.readdir(name,
+      Dirents unixDirents = NativePosixFiles.readdir(name,
           followSymlinks ? ReadTypes.FOLLOW : ReadTypes.NOFOLLOW);
       Preconditions.checkState(unixDirents.hasTypes());
       List<Dirent> dirents = Lists.newArrayListWithCapacity(unixDirents.size());
@@ -165,8 +252,8 @@ public class UnixFileSystem extends AbstractFileSystem {
     long startTime = Profiler.nanoTimeMaybe();
     try {
       return new UnixFileStatus(followSymlinks
-                                      ? FilesystemUtils.stat(name)
-                                      : FilesystemUtils.lstat(name));
+                                      ? NativePosixFiles.stat(name)
+                                      : NativePosixFiles.lstat(name));
     } finally {
       profiler.logSimpleTask(startTime, ProfilerTask.VFS_STAT, name);
     }
@@ -181,8 +268,8 @@ public class UnixFileSystem extends AbstractFileSystem {
     long startTime = Profiler.nanoTimeMaybe();
     try {
       ErrnoFileStatus stat = followSymlinks
-          ? FilesystemUtils.errnoStat(name)
-          : FilesystemUtils.errnoLstat(name);
+          ? NativePosixFiles.errnoStat(name)
+          : NativePosixFiles.errnoLstat(name);
       return stat.hasError() ? null : new UnixFileStatus(stat);
     } finally {
       profiler.logSimpleTask(startTime, ProfilerTask.VFS_STAT, name);
@@ -204,8 +291,8 @@ public class UnixFileSystem extends AbstractFileSystem {
     long startTime = Profiler.nanoTimeMaybe();
     try {
       ErrnoFileStatus stat = followSymlinks
-          ? FilesystemUtils.errnoStat(name)
-          : FilesystemUtils.errnoLstat(name);
+          ? NativePosixFiles.errnoStat(name)
+          : NativePosixFiles.errnoLstat(name);
       if (!stat.hasError()) {
         return new UnixFileStatus(stat);
       }
@@ -222,20 +309,6 @@ public class UnixFileSystem extends AbstractFileSystem {
     } finally {
       profiler.logSimpleTask(startTime, ProfilerTask.VFS_STAT, name);
     }
-  }
-
-  @Override
-  protected boolean isDirectory(Path path, boolean followSymlinks) {
-    FileStatus stat = statNullable(path, followSymlinks);
-    return stat != null && stat.isDirectory();
-  }
-
-  @Override
-  protected boolean isFile(Path path, boolean followSymlinks) {
-    // Note, FileStatus.isFile means *regular* file whereas Path.isFile may
-    // mean special file too, so we don't return FileStatus.isFile here.
-    FileStatus status = statNullable(path, followSymlinks);
-    return status != null && !(status.isSymbolicLink() || status.isDirectory());
   }
 
   @Override
@@ -265,7 +338,7 @@ public class UnixFileSystem extends AbstractFileSystem {
     synchronized (path) {
       int oldMode = statInternal(path, true).getPermissions();
       int newMode = add ? (oldMode | permissionBits) : (oldMode & ~permissionBits);
-      FilesystemUtils.chmod(path.toString(), newMode);
+      NativePosixFiles.chmod(path.toString(), newMode);
     }
   }
 
@@ -287,7 +360,7 @@ public class UnixFileSystem extends AbstractFileSystem {
   @Override
   protected void chmod(Path path, int mode) throws IOException {
     synchronized (path) {
-      FilesystemUtils.chmod(path.toString(), mode);
+      NativePosixFiles.chmod(path.toString(), mode);
     }
   }
 
@@ -297,8 +370,8 @@ public class UnixFileSystem extends AbstractFileSystem {
   }
 
   @Override
-  public boolean supportsSymbolicLinks() {
-    return true;
+  public boolean supportsSymbolicLinksNatively() {
+    return symlinkStrategy != SymlinkStrategy.WINDOWS_COMPATIBLE;
   }
 
   @Override
@@ -306,7 +379,7 @@ public class UnixFileSystem extends AbstractFileSystem {
     synchronized (path) {
       // Note: UNIX mkdir(2), FilesystemUtils.mkdir() and createDirectory all
       // have different ways of representing failure!
-      if (FilesystemUtils.mkdir(path.toString(), 0777)) {
+      if (NativePosixFiles.mkdir(path.toString(), 0777)) {
         return true; // successfully created
       }
 
@@ -322,17 +395,141 @@ public class UnixFileSystem extends AbstractFileSystem {
   @Override
   protected void createSymbolicLink(Path linkPath, PathFragment targetFragment)
       throws IOException {
-    synchronized (linkPath) {
-      FilesystemUtils.symlink(targetFragment.toString(), linkPath.toString());
+    SymlinkImplementation strategy = computeSymlinkImplementation(linkPath, targetFragment);
+    switch (strategy) {
+      case HARDLINK:
+        NativePosixFiles.link(targetFragment.toString(), linkPath.toString());
+        break;
+
+      case JUNCTION:  // Junctions are emulated on Linux with symlinks, fall through
+      case SYMLINK:
+        synchronized (linkPath) {
+          NativePosixFiles.symlink(targetFragment.toString(), linkPath.toString());
+        }
+        break;
+
+      case FAIL:
+        if (symlinkLogFile == null) {
+          // Otherwise, it was logged in computeSymlinkImplementation().
+          throw new IOException(String.format("Symlink emulation failed for symlink: %s -> %s",
+              linkPath, targetFragment));
+        }
     }
+  }
+
+  private boolean isHardLinkAllowed(Path path) {
+    for (Path root : rootsWithAllowedHardlinks) {
+      if (path.startsWith(root)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private static final int JVM_ID = new Random().nextInt(10000);
+
+  private void writeLogMessage(String message) {
+    String logLine = String.format("[%04d] %s\n", JVM_ID, message);
+    // FileLock does not work for synchronization between threads in the same JVM as per its Javadoc
+    synchronized (symlinkLogFile) {
+
+      try (FileChannel channel = new RandomAccessFile(symlinkLogFile, "rwd").getChannel()) {
+        try (FileLock lock = channel.lock()) {
+          channel.position(channel.size());
+          ByteBuffer data = Charset.forName("UTF-8").newEncoder().encode(CharBuffer.wrap(logLine));
+          channel.write(data);
+        }
+      } catch (IOException e) {
+        // Not much intelligent we can do here
+      }
+    }
+  }
+
+  /**
+   * How to create a particular symbolic link.
+   *
+   * <p>Necessary because Windows doesn't support symlinks properly, so we have to work around it.
+   * No, even though they say <i>"Microsoft has implemented its symbolic links to function just like
+   * UNIX links"</i>, it's a lie.
+   */
+  private enum SymlinkImplementation {
+    /**
+     * We can't emulate this link. Fail.
+     */
+    FAIL,
+
+    /**
+     * Create a hard link. This only works if we have write access to the ultimate destination on
+     * the link.
+     */
+    HARDLINK,
+
+    /**
+     * Create a junction. This only works if the ultimate target of the "symlink" is a directory.
+     */
+    JUNCTION,
+
+    /**
+     * Use a symlink. Always works, but only on Unix-based operating systems.
+     */
+    SYMLINK,
+  }
+
+  private SymlinkImplementation emitSymlinkCompatibilityMessage(
+    String reason, Path linkPath, PathFragment targetFragment) {
+    if (symlinkLogFile == null) {
+      return SymlinkImplementation.FAIL;
+    }
+
+    Exception e = new Exception();
+    e.fillInStackTrace();
+    String msg = String.format("ILLEGAL (%s): %s -> %s\nStack:\n%s",
+        reason, linkPath.getPathString(), targetFragment.getPathString(),
+        Throwables.getStackTraceAsString(e));
+    writeLogMessage(msg);
+    return SymlinkImplementation.SYMLINK;  // We are in logging mode, pretend everything is A-OK
+  }
+
+  private SymlinkImplementation computeSymlinkImplementation(
+      Path linkPath, PathFragment targetFragment) throws IOException {
+    if (symlinkStrategy != SymlinkStrategy.WINDOWS_COMPATIBLE) {
+      return SymlinkImplementation.SYMLINK;
+    }
+
+    Path targetPath = linkPath.getRelative(targetFragment);
+    if (!targetPath.exists(Symlinks.FOLLOW)) {
+      return emitSymlinkCompatibilityMessage(
+          "Target does not exist", linkPath, targetFragment);
+    }
+
+    targetPath = targetPath.resolveSymbolicLinks();
+    if (targetPath.isDirectory(Symlinks.FOLLOW)) {
+      // We can create junctions to any directory.
+      return SymlinkImplementation.JUNCTION;
+    }
+
+    if (isHardLinkAllowed(targetPath)) {
+      // We have write access to the destination and it's a file, so we can do this
+      return SymlinkImplementation.HARDLINK;
+    }
+
+    return emitSymlinkCompatibilityMessage(
+        "Target is a non-writable file", linkPath, targetFragment);
+  }
+
+  public SymlinkStrategy getSymlinkStrategy() {
+    return symlinkStrategy;
   }
 
   @Override
   protected PathFragment readSymbolicLink(Path path) throws IOException {
+    // Note that the default implementation of readSymbolicLinkUnchecked calls this method and thus
+    // is optimal since we only make one system call in here.
     String name = path.toString();
     long startTime = Profiler.nanoTimeMaybe();
     try {
-      return new PathFragment(FilesystemUtils.readlink(name));
+      return new PathFragment(NativePosixFiles.readlink(name));
     } catch (IOException e) {
       // EINVAL => not a symbolic link.  Anything else is a real error.
       throw e.getMessage().endsWith("(Invalid argument)") ? new NotASymlinkException(path) : e;
@@ -344,7 +541,7 @@ public class UnixFileSystem extends AbstractFileSystem {
   @Override
   protected void renameTo(Path sourcePath, Path targetPath) throws IOException {
     synchronized (sourcePath) {
-      FilesystemUtils.rename(sourcePath.toString(), targetPath.toString());
+      NativePosixFiles.rename(sourcePath.toString(), targetPath.toString());
     }
   }
 
@@ -359,7 +556,7 @@ public class UnixFileSystem extends AbstractFileSystem {
     long startTime = Profiler.nanoTimeMaybe();
     synchronized (path) {
       try {
-        return FilesystemUtils.remove(name);
+        return NativePosixFiles.remove(name);
       } finally {
         profiler.logSimpleTask(startTime, ProfilerTask.VFS_DELETE, name);
       }
@@ -372,31 +569,24 @@ public class UnixFileSystem extends AbstractFileSystem {
   }
 
   @Override
-  protected boolean isSymbolicLink(Path path) {
-    FileStatus stat = statNullable(path, false);
-    return stat != null && stat.isSymbolicLink();
-  }
-
-  @Override
   protected void setLastModifiedTime(Path path, long newTime) throws IOException {
     synchronized (path) {
       if (newTime == -1L) { // "now"
-        FilesystemUtils.utime(path.toString(), true, 0, 0);
+        NativePosixFiles.utime(path.toString(), true, 0);
       } else {
         // newTime > MAX_INT => -ve unixTime
         int unixTime = (int) (newTime / 1000);
-        FilesystemUtils.utime(path.toString(), false, unixTime, unixTime);
+        NativePosixFiles.utime(path.toString(), false, unixTime);
       }
     }
   }
 
   @Override
-  protected byte[] getxattr(Path path, String name, boolean followSymlinks) throws IOException {
+  protected byte[] getxattr(Path path, String name) throws IOException {
     String pathName = path.toString();
     long startTime = Profiler.nanoTimeMaybe();
     try {
-      return followSymlinks
-          ? FilesystemUtils.getxattr(pathName, name) : FilesystemUtils.lgetxattr(pathName, name);
+      return NativePosixFiles.getxattr(pathName, name);
     } catch (UnsupportedOperationException e) {
       // getxattr() syscall is not supported by the underlying filesystem (it returned ENOTSUP).
       // Per method contract, treat this as ENODATA.
@@ -411,7 +601,7 @@ public class UnixFileSystem extends AbstractFileSystem {
     String name = path.toString();
     long startTime = Profiler.nanoTimeMaybe();
     try {
-      return FilesystemUtils.md5sum(name).asBytes();
+      return NativePosixFiles.md5sum(name).asBytes();
     } finally {
       profiler.logSimpleTask(startTime, ProfilerTask.VFS_MD5, name);
     }

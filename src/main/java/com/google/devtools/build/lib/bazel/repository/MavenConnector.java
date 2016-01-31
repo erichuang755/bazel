@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -34,7 +34,7 @@ import org.eclipse.aether.transport.http.HttpTransporterFactory;
  * Connections to Maven repositories.
  */
 public class MavenConnector {
-  private static final String MAVEN_CENTRAL_URL = "http://central.maven.org/maven2/";
+  private static final String MAVEN_CENTRAL_URL = "https://repo1.maven.org/maven2/";
 
   private final String localRepositoryPath;
 

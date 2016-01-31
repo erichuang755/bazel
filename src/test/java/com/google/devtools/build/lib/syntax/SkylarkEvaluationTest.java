@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -27,9 +27,12 @@ import com.google.devtools.build.lib.analysis.FileConfiguredTarget;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTarget;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
 import com.google.devtools.build.lib.syntax.ClassObject.SkylarkClassObject;
 import com.google.devtools.build.lib.testutil.TestMode;
 
+import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -39,7 +42,9 @@ import org.junit.runners.JUnit4;
  */
 @RunWith(JUnit4.class)
 public class SkylarkEvaluationTest extends EvaluationTest {
-  public SkylarkEvaluationTest() throws Exception {
+
+  @Before
+  public final void setup() throws Exception {
     setMode(TestMode.SKYLARK);
   }
 
@@ -50,6 +55,11 @@ public class SkylarkEvaluationTest extends EvaluationTest {
   @Override
   protected ModalTestCase newTest() {
     return new SkylarkTest();
+  }
+
+  static class Bad {
+    Bad () {
+    }
   }
 
   @SkylarkModule(name = "Mock", doc = "")
@@ -64,8 +74,8 @@ public class SkylarkEvaluationTest extends EvaluationTest {
     }
     public void value() {}
     @SkylarkCallable(doc = "")
-    public Mock returnMutable() {
-      return new Mock();
+    public Bad returnBad() {
+      return new Bad();
     }
     @SkylarkCallable(name = "struct_field", doc = "", structField = true)
     public String structField() {
@@ -302,6 +312,13 @@ public class SkylarkEvaluationTest extends EvaluationTest {
         "  for i in d: s = s + d[i]",
         "  return s",
         "s = foo()").testLookup("s", "abc");
+  }
+
+  @Test
+  public void testBadDictKey() throws Exception {
+    new SkylarkTest().testIfErrorContains(
+        "unhashable type: 'list'",
+        "{ [1, 2]: [3, 4] }");
   }
 
   @Test
@@ -594,8 +611,8 @@ public class SkylarkEvaluationTest extends EvaluationTest {
     new SkylarkTest()
         .update("mock", new Mock())
         .testIfExactError(
-            "Method 'return_mutable' returns a mutable object (type of Mock)",
-            "mock.return_mutable()");
+            "Method 'return_bad' returns an object of invalid type Bad",
+            "mock.return_bad()");
   }
 
   @Test
@@ -799,6 +816,24 @@ public class SkylarkEvaluationTest extends EvaluationTest {
   }
 
   @Test
+  public void testDictTupleAssignmentAsLValue() throws Exception {
+    new SkylarkTest().setUp("def func():",
+        "  d = {'a' : 1}",
+        "  d['b'], d['c'] = 2, 3",
+        "  return d",
+        "d = func()").testLookup("d", ImmutableMap.of("a", 1, "b", 2, "c", 3));
+  }
+
+  @Test
+  public void testDictItemPlusEqual() throws Exception {
+    new SkylarkTest().setUp("def func():",
+        "  d = {'a' : 2}",
+        "  d['a'] += 3",
+        "  return d",
+        "d = func()").testLookup("d", ImmutableMap.of("a", 5));
+  }
+
+  @Test
   public void testDictAssignmentAsLValueNoSideEffects() throws Exception {
     new SkylarkTest().setUp("def func(d):",
         "  d['b'] = 2",
@@ -810,7 +845,7 @@ public class SkylarkEvaluationTest extends EvaluationTest {
   public void testListIndexAsLValueAsLValue() throws Exception {
     new SkylarkTest()
         .testIfErrorContains(
-            "unsupported operand type(s) for +: 'list' and 'dict'",
+            "can only assign an element in a dictionary, not in a 'list'",
             "def id(l):",
             "  return l",
             "def func():",
@@ -903,7 +938,8 @@ public class SkylarkEvaluationTest extends EvaluationTest {
 
   @Test
   public void testListAnTupleConcatenationDoesNotWorkInSkylark() throws Exception {
-    new SkylarkTest().testIfExactError("cannot concatenate lists and tuples", "[1, 2] + (3, 4)");
+    new SkylarkTest().testIfExactError("unsupported operand type(s) for +: 'list' and 'tuple'",
+        "[1, 2] + (3, 4)");
   }
 
   @Test
@@ -944,7 +980,7 @@ public class SkylarkEvaluationTest extends EvaluationTest {
         "is_empty",
         "nullfunc_failing",
         "nullfunc_working",
-        "return_mutable",
+        "return_bad",
         "string",
         "string_list",
         "struct_field",
@@ -957,11 +993,11 @@ public class SkylarkEvaluationTest extends EvaluationTest {
     // TODO(fwe): cannot be handled by current testing suite
     setFailFast(false);
     eval("print('hello')");
-    assertContainsEvent("hello");
+    assertContainsWarning("hello");
     eval("print('a', 'b')");
-    assertContainsEvent("a b");
+    assertContainsWarning("a b");
     eval("print('a', 'b', sep='x')");
-    assertContainsEvent("axb");
+    assertContainsWarning("axb");
   }
 
   @Test

@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -31,16 +31,16 @@ import com.google.devtools.build.lib.analysis.config.ConfigurationFactory;
 import com.google.devtools.build.lib.analysis.config.InvalidConfigurationException;
 import com.google.devtools.build.lib.analysis.config.PackageProviderForConfigurations;
 import com.google.devtools.build.lib.bazel.rules.cpp.BazelCppRuleClasses.CppTransition;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.packages.AggregatingAttributeMapper;
 import com.google.devtools.build.lib.packages.Attribute.ConfigurationTransition;
 import com.google.devtools.build.lib.packages.Attribute.SplitTransition;
 import com.google.devtools.build.lib.packages.Attribute.Transition;
+import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.packages.NoSuchThingException;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.Target;
-import com.google.devtools.build.lib.packages.Type;
-import com.google.devtools.build.lib.syntax.Label;
 
 import java.util.Collection;
 import java.util.HashSet;
@@ -60,13 +60,13 @@ public class BazelConfigurationCollection implements ConfigurationCollectionFact
   public BuildConfiguration createConfigurations(
       ConfigurationFactory configurationFactory,
       Cache<String, BuildConfiguration> cache,
-      PackageProviderForConfigurations loadedPackageProvider,
+      PackageProviderForConfigurations packageProvider,
       BuildOptions buildOptions,
       EventHandler errorEventListener,
       boolean performSanityCheck) throws InvalidConfigurationException {
     // Target configuration
     BuildConfiguration targetConfiguration = configurationFactory.getConfiguration(
-        loadedPackageProvider, buildOptions, false, cache);
+        packageProvider, buildOptions, false, cache);
     if (targetConfiguration == null) {
       return null;
     }
@@ -77,7 +77,7 @@ public class BazelConfigurationCollection implements ConfigurationCollectionFact
     // Note that this passes in the dataConfiguration, not the target
     // configuration. This is intentional.
     BuildConfiguration hostConfiguration = getHostConfigurationFromRequest(configurationFactory,
-        loadedPackageProvider, dataConfiguration, buildOptions, cache);
+        packageProvider, dataConfiguration, buildOptions, cache);
     if (hostConfiguration == null) {
       return null;
     }
@@ -99,11 +99,11 @@ public class BazelConfigurationCollection implements ConfigurationCollectionFact
 
       for (BuildOptions splitOptions : splitOptionsList) {
         BuildConfiguration splitConfig = configurationFactory.getConfiguration(
-            loadedPackageProvider, splitOptions, false, cache);
+            packageProvider, splitOptions, false, cache);
         splitTransitionsTable.put(transition, splitConfig);
       }
     }
-    if (loadedPackageProvider.valuesMissing()) {
+    if (packageProvider.valuesMissing()) {
       return null;
     }
 
@@ -115,7 +115,7 @@ public class BazelConfigurationCollection implements ConfigurationCollectionFact
       // We allow the package provider to be null for testing.
       for (Label label : buildOptions.getAllLabels().values()) {
         try {
-          collectTransitiveClosure(loadedPackageProvider, reachableLabels, label);
+          collectTransitiveClosure(packageProvider, reachableLabels, label);
         } catch (NoSuchThingException e) {
           // We've loaded the transitive closure of the labels-to-load above, and made sure that
           // there are no errors loading it, so this can't happen.
@@ -265,31 +265,33 @@ public class BazelConfigurationCollection implements ConfigurationCollectionFact
     }
   }
 
-  private void collectTransitiveClosure(PackageProviderForConfigurations loadedPackageProvider,
+  private void collectTransitiveClosure(PackageProviderForConfigurations packageProvider,
       Set<Label> reachableLabels, Label from) throws NoSuchThingException {
     if (!reachableLabels.add(from)) {
       return;
     }
-    Target fromTarget = loadedPackageProvider.getLoadedTarget(from);
+    Target fromTarget = packageProvider.getTarget(from);
     if (fromTarget instanceof Rule) {
       Rule rule = (Rule) fromTarget;
-      if (rule.getRuleClassObject().hasAttr("srcs", Type.LABEL_LIST)) {
+      if (rule.getRuleClassObject().hasAttr("srcs", BuildType.LABEL_LIST)) {
         // TODO(bazel-team): refine this. This visits "srcs" reachable under *any* configuration,
         // not necessarily the configuration actually applied to the rule. We should correlate the
         // two. However, doing so requires faithfully reflecting the configuration transitions that
         // might happen as we traverse the dependency chain.
+        // TODO(bazel-team): Why don't we use AbstractAttributeMapper#visitLabels() here?
         for (List<Label> labelsForConfiguration :
-            AggregatingAttributeMapper.of(rule).visitAttribute("srcs", Type.LABEL_LIST)) {
+            AggregatingAttributeMapper.of(rule).visitAttribute("srcs", BuildType.LABEL_LIST)) {
           for (Label label : labelsForConfiguration) {
-            collectTransitiveClosure(loadedPackageProvider, reachableLabels, label);
+            collectTransitiveClosure(packageProvider, reachableLabels,
+                from.resolveRepositoryRelative(label));
           }
         }
       }
 
       if (rule.getRuleClass().equals("bind")) {
-        Label actual = AggregatingAttributeMapper.of(rule).get("actual", Type.LABEL);
+        Label actual = AggregatingAttributeMapper.of(rule).get("actual", BuildType.LABEL);
         if (actual != null) {
-          collectTransitiveClosure(loadedPackageProvider, reachableLabels, actual);
+          collectTransitiveClosure(packageProvider, reachableLabels, actual);
         }
       }
     }

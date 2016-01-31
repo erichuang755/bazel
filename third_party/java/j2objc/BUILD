@@ -1,4 +1,4 @@
-# Copyright 2015 Google Inc. All rights reserved.
+# Copyright 2015 The Bazel Authors. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -29,4 +29,23 @@ filegroup(
 java_library(
     name = "annotations",
     srcs = ["@bazel-j2objc//:annotations"],
+)
+
+objc_library(
+    name = "jre_emul_lib",
+    sdk_dylibs = [
+        "libicucore",
+        "libz",
+    ],
+    sdk_frameworks = [
+        "Security",
+    ],
+    deps = ["@bazel_j2objc//:jre_emul_archive"],
+)
+
+# Proto support is a work in progress.
+# We put an empty filegroup here so Bazel analysis doesn't fail.
+filegroup(
+    name = "proto_runtime",
+    srcs = [],
 )

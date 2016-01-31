@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,11 +16,11 @@ package com.google.devtools.build.lib.packages;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.packages.License.DistributionType;
-import com.google.devtools.build.lib.syntax.Label;
 
 import java.util.Collection;
 import java.util.Collections;
@@ -51,7 +51,7 @@ public class PackageGroup implements Target {
     for (String containedPackage : packages) {
       PackageSpecification specification = null;
       try {
-        specification = PackageSpecification.fromString(containedPackage);
+        specification = PackageSpecification.fromString(label, containedPackage);
       } catch (PackageSpecification.InvalidPackageSpecificationException e) {
         containsErrors = true;
         eventHandler.handle(Event.error(location, e.getMessage()));
@@ -74,7 +74,7 @@ public class PackageGroup implements Target {
 
   public boolean contains(Package pkg) {
     for (PackageSpecification specification : packageSpecifications) {
-      if (specification.containsPackage(pkg.getNameFragment())) {
+      if (specification.containsPackage(pkg.getPackageIdentifier())) {
         return true;
       }
     }
@@ -144,6 +144,11 @@ public class PackageGroup implements Target {
     // needing itself for the visibility check. It may work, but I did not
     // think it over completely.
     return ConstantRuleVisibility.PUBLIC;
+  }
+
+  @Override
+  public boolean isConfigurable() {
+    return false;
   }
 
   public static String targetKind() {

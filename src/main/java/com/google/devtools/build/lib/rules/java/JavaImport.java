@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.FileProvider;
+import com.google.devtools.build.lib.analysis.OutputGroupProvider;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetBuilder;
 import com.google.devtools.build.lib.analysis.RuleContext;
@@ -78,9 +79,9 @@ public class JavaImport implements RuleConfiguredTargetFactory {
         common.collectTransitiveJavaNativeLibraries();
     boolean neverLink = JavaCommon.isNeverLink(ruleContext);
     JavaCompilationArgs javaCompilationArgs = common.collectJavaCompilationArgs(
-        false, neverLink, compilationArgsFromSources());
+        false, neverLink, compilationArgsFromSources(), false);
     JavaCompilationArgs recursiveJavaCompilationArgs = common.collectJavaCompilationArgs(
-        true, neverLink, compilationArgsFromSources());
+        true, neverLink, compilationArgsFromSources(), false);
     NestedSet<Artifact> transitiveJavaSourceJars =
         collectTransitiveJavaSourceJars(ruleContext, srcJar);
     if (srcJar != null) {
@@ -133,6 +134,8 @@ public class JavaImport implements RuleConfiguredTargetFactory {
         .setSourceJarsForJarFiles(srcJars)
         .build();
 
+    NestedSet<Artifact> proguardSpecs = new ProguardLibrary(ruleContext).collectProguardSpecs();
+
     common.addTransitiveInfoProviders(ruleBuilder, filesToBuild, null);
     return ruleBuilder
         .setFilesToBuild(filesToBuild)
@@ -150,7 +153,9 @@ public class JavaImport implements RuleConfiguredTargetFactory {
         .add(JavaSourceInfoProvider.class, javaSourceInfoProvider)
         .add(JavaSourceJarsProvider.class, new JavaSourceJarsProvider(
             transitiveJavaSourceJars, srcJars))
+        .add(ProguardSpecProvider.class, new ProguardSpecProvider(proguardSpecs))
         .addOutputGroup(JavaSemantics.SOURCE_JARS_OUTPUT_GROUP, transitiveJavaSourceJars)
+        .addOutputGroup(OutputGroupProvider.HIDDEN_TOP_LEVEL, proguardSpecs)
         .build();
   }
 

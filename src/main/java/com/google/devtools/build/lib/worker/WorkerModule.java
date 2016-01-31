@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,7 +13,6 @@
 // limitations under the License.
 package com.google.devtools.build.lib.worker;
 
-import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.eventbus.Subscribe;
 import com.google.devtools.build.lib.actions.ActionContextConsumer;
@@ -24,8 +23,9 @@ import com.google.devtools.build.lib.buildtool.buildevent.BuildInterruptedEvent;
 import com.google.devtools.build.lib.buildtool.buildevent.BuildStartingEvent;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.runtime.BlazeModule;
-import com.google.devtools.build.lib.runtime.BlazeRuntime;
 import com.google.devtools.build.lib.runtime.Command;
+import com.google.devtools.build.lib.runtime.CommandEnvironment;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.common.options.OptionsBase;
 
@@ -37,9 +37,10 @@ import java.io.IOException;
  * A module that adds the WorkerActionContextProvider to the available action context providers.
  */
 public class WorkerModule extends BlazeModule {
-  private BlazeRuntime blazeRuntime;
-  private BuildRequest buildRequest;
   private WorkerPool workers;
+
+  private CommandEnvironment env;
+  private BuildRequest buildRequest;
   private boolean verbose;
 
   @Override
@@ -50,25 +51,42 @@ public class WorkerModule extends BlazeModule {
   }
 
   @Override
-  public void beforeCommand(BlazeRuntime blazeRuntime, Command command) {
-    this.blazeRuntime = Preconditions.checkNotNull(blazeRuntime);
-    blazeRuntime.getEventBus().register(this);
+  public void beforeCommand(Command command, CommandEnvironment env) {
+    this.env = env;
+    env.getEventBus().register(this);
 
     if (workers == null) {
-      Path logDir = blazeRuntime.getOutputBase().getRelative("worker-logs");
+      Path logDir = env.getRuntime().getOutputBase().getRelative("worker-logs");
       try {
         logDir.createDirectory();
       } catch (IOException e) {
-        blazeRuntime
+        env
             .getReporter()
             .handle(Event.error("Could not create directory for worker logs: " + logDir));
       }
 
       GenericKeyedObjectPoolConfig config = new GenericKeyedObjectPoolConfig();
-      config.setTimeBetweenEvictionRunsMillis(10 * 1000);
+
+      // It's better to re-use a worker as often as possible and keep it hot, in order to profit
+      // from JIT optimizations as much as possible.
+      config.setLifo(true);
+
+      // Check for & deal with idle workers every 5 seconds.
+      config.setTimeBetweenEvictionRunsMillis(5 * 1000);
+
+      // Always test the liveliness of worker processes.
+      config.setTestOnBorrow(true);
+      config.setTestOnCreate(true);
+      config.setTestOnReturn(true);
+      config.setTestWhileIdle(true);
+
+      // Don't limit the total number of worker processes, as otherwise the pool might be full of
+      // e.g. Java workers and could never accommodate another request for a different kind of
+      // worker.
+      config.setMaxTotal(-1);
 
       workers = new WorkerPool(new WorkerFactory(), config);
-      workers.setReporter(blazeRuntime.getReporter());
+      workers.setReporter(env.getReporter());
       workers.setLogDirectory(logDir);
     }
   }
@@ -89,13 +107,13 @@ public class WorkerModule extends BlazeModule {
 
   @Override
   public Iterable<ActionContextProvider> getActionContextProviders() {
-    Preconditions.checkNotNull(blazeRuntime);
+    Preconditions.checkNotNull(env);
     Preconditions.checkNotNull(buildRequest);
     Preconditions.checkNotNull(workers);
 
     return ImmutableList.<ActionContextProvider>of(
         new WorkerActionContextProvider(
-            blazeRuntime, buildRequest, workers, blazeRuntime.getEventBus()));
+            env.getRuntime(), buildRequest, workers, env.getEventBus()));
   }
 
   @Override
@@ -107,7 +125,7 @@ public class WorkerModule extends BlazeModule {
   public void buildComplete(BuildCompleteEvent event) {
     if (workers != null && buildRequest.getOptions(WorkerOptions.class).workerQuitAfterBuild) {
       if (verbose) {
-        blazeRuntime
+        env
             .getReporter()
             .handle(Event.info("Build completed, shutting down worker pool..."));
       }
@@ -123,7 +141,7 @@ public class WorkerModule extends BlazeModule {
   public void buildInterrupted(BuildInterruptedEvent event) {
     if (workers != null) {
       if (verbose) {
-        blazeRuntime
+        env
             .getReporter()
             .handle(Event.info("Build interrupted, shutting down worker pool..."));
       }
@@ -134,7 +152,8 @@ public class WorkerModule extends BlazeModule {
 
   @Override
   public void afterCommand() {
-    this.blazeRuntime = null;
+    this.env = null;
     this.buildRequest = null;
+    this.verbose = false;
   }
 }

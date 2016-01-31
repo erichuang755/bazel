@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,7 +20,6 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableBiMap;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Ordering;
 import com.google.common.collect.Sets;
@@ -53,6 +52,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 import javax.xml.parsers.ParserConfigurationException;
 
@@ -61,7 +61,11 @@ import javax.xml.parsers.ParserConfigurationException;
  */
 public class PlistMerging extends Value<PlistMerging> {
   private static final String BUNDLE_IDENTIFIER_PLIST_KEY = "CFBundleIdentifier";
-
+  private static final String BUNDLE_IDENTIFIER_DEFAULT = "com.generic.bundleidentifier";
+  private static final String BUNDLE_VERSION_PLIST_KEY = "CFBundleVersion";
+  private static final String BUNDLE_VERSION_DEFAULT = "1.0.0";
+  private static final String BUNDLE_SHORT_VERSION_STRING_PLIST_KEY = "CFBundleShortVersionString";
+  private static final String BUNDLE_SHORT_VERSION_STRING_DEFAULT = "1.0";
   private static final ImmutableBiMap<String, Integer> DEVICE_FAMILIES =
       ImmutableBiMap.of("IPHONE", 1, "IPAD", 2);
 
@@ -76,8 +80,10 @@ public class PlistMerging extends Value<PlistMerging> {
 
   private final NSDictionary merged;
 
-  @VisibleForTesting
-  PlistMerging(NSDictionary merged) {
+  /**
+   * Wraps a {@code NSDictionary} as a PlistMerging.
+   */
+  public PlistMerging(NSDictionary merged) {
     super(merged);
     this.merged = merged;
   }
@@ -165,38 +171,70 @@ public class PlistMerging extends Value<PlistMerging> {
     result.put("CFBundleSupportedPlatforms", new NSArray(NSObject.wrap(platform.getNameInPlist())));
     result.put("MinimumOSVersion", NSObject.wrap(minimumOsVersion));
 
-    // Adding these here by brute force to override values inserted by
-    // release bundling support which are wrong.
-    // These shall be removed once the errors in release bundling support are fixed.
-    // These values are taken from an Xcode 6.2 device build.
-    // Adding them to a simulator build causes no problems when tested with Xcode 6.2.
-    result.put("DTPlatformBuild", NSObject.wrap("12D508"));
-    result.put("DTSDKBuild", NSObject.wrap("12D508"));
-    result.put("DTXcode", NSObject.wrap("0620"));
-    result.put("DTXcodeBuild", NSObject.wrap("6C131e"));
     return result.build();
   }
 
   /**
-   * Generates final merged Plist file and PkgInfo file in the specified locations, and includes the
-   * "automatic" entries in the Plist.
+   * Generates a Plistmerging combining values from sourceFiles and immutableSourceFiles, and 
+   * modifying them based on substitutions and keysToRemoveIfEmptyString.
    */
-  public static PlistMerging from(List<Path> sourceFiles, Map<String, NSObject> automaticEntries,
-      Map<String, String> substitutions, KeysToRemoveIfEmptyString keysToRemoveIfEmptyString)
-          throws IOException {
+  public static PlistMerging from(
+      MergingArguments mergingArguments,
+      KeysToRemoveIfEmptyString keysToRemoveIfEmptyString)
+      throws IOException {
+     
+    return from(
+        mergingArguments.getSourceFilePaths(),
+        mergingArguments.getImmutableSourceFilePaths(),
+        mergingArguments.getVariableSubstitutions(),
+        keysToRemoveIfEmptyString,
+        mergingArguments.getExecutableName());
+  }
+  
+  /**
+   * Generates a Plistmerging combining values from sourceFiles and immutableSourceFiles, and
+   * modifying them based on subsitutions and keysToRemoveIfEmptyString.
+   */
+  public static PlistMerging from(
+      List<Path> sourceFiles,
+      List<Path> immutableSourceFiles,
+      Map<String, String> substitutions,
+      KeysToRemoveIfEmptyString keysToRemoveIfEmptyString,
+      String executableName)
+      throws IOException {
+    return from(
+        sourceFiles,
+        PlistMerging.merge(immutableSourceFiles),
+        substitutions,
+        keysToRemoveIfEmptyString,
+        executableName);
+  }
+
+  /**
+   * Generates a Plistmerging combining values from sourceFiles and immutableEntries, and modifying
+   * them based on subsitutions and keysToRemoveIfEmptyString.
+   *
+   * This version of from() is required until bundlemerge no longer uses this method.
+   * TODO (cpeyser): Remove this version to require from() accepts a list of immutable source file
+   * paths instead of an already-merged map of entries.
+   */
+  public static PlistMerging from(
+      List<Path> sourceFiles,
+      Map<String, NSObject> immutableEntries,
+      Map<String, String> substitutions,
+      KeysToRemoveIfEmptyString keysToRemoveIfEmptyString,
+      String executableName)
+      throws IOException {
     NSDictionary merged = PlistMerging.merge(sourceFiles);
 
-    // Remove the entries that we have added by brute force in automaticEntries so that our
-    // check for conflictingEntries still works.
-    // This shall be removed once the errors in release bundling support are fixed.
-    Set<String> conflictingEntries = Sets.difference(
-        Sets.intersection(automaticEntries.keySet(), merged.keySet()),
-        ImmutableSet.of("DTPlatformBuild", "DTSDKBuild", "DTXcode", "DTXcodeBuild"));
+    Set<String> conflictingEntries = Sets.intersection(immutableEntries.keySet(), merged.keySet());
 
-    Preconditions.checkArgument(conflictingEntries.isEmpty(),
-        "The following plist entries are generated automatically, but are present in more than one "
-            + "of the input lists: %s", conflictingEntries);
-    merged.putAll(automaticEntries);
+    Preconditions.checkArgument(
+        conflictingEntries.isEmpty(),
+        "The following plist entries may not be overridden, but are present in more than one "
+            + "of the input lists: %s",
+        conflictingEntries);
+    merged.putAll(immutableEntries);
 
     for (Map.Entry<String, NSObject> entry : merged.entrySet()) {
       if (entry.getValue().toJavaObject() instanceof String) {
@@ -212,26 +250,66 @@ public class PlistMerging extends Value<PlistMerging> {
       }
     }
 
-    return new PlistMerging(merged);
+    // Info.plist files must contain a valid CFBundleVersion and a valid CFBundleShortVersionString,
+    // or it will be rejected by Apple.
+    // A valid Bundle Version is 18 characters or less, and only contains [0-9.]
+    // We know we have an info.plist file as opposed to a strings file if the immutableEntries
+    // have any values set.
+    // TODO(bazel-team): warn user if we replace their values.
+    if (!immutableEntries.isEmpty()) {
+      Pattern versionPattern = Pattern.compile("[^0-9.]");
+      if (!merged.containsKey(BUNDLE_VERSION_PLIST_KEY)) {
+        merged.put(BUNDLE_VERSION_PLIST_KEY, BUNDLE_VERSION_DEFAULT);
+      } else {
+        NSObject nsVersion = merged.get(BUNDLE_VERSION_PLIST_KEY);
+        String version = (String) nsVersion.toJavaObject();
+        if (version.length() > 18 || versionPattern.matcher(version).find()) {
+          merged.put(BUNDLE_VERSION_PLIST_KEY, BUNDLE_VERSION_DEFAULT);
+        }
+      }
+      if (!merged.containsKey(BUNDLE_SHORT_VERSION_STRING_PLIST_KEY)) {
+        merged.put(BUNDLE_SHORT_VERSION_STRING_PLIST_KEY, BUNDLE_SHORT_VERSION_STRING_DEFAULT);
+      } else {
+        NSObject nsVersion = merged.get(BUNDLE_SHORT_VERSION_STRING_PLIST_KEY);
+        String version = (String) nsVersion.toJavaObject();
+        if (version.length() > 18 || versionPattern.matcher(version).find()) {
+          merged.put(BUNDLE_SHORT_VERSION_STRING_PLIST_KEY, BUNDLE_SHORT_VERSION_STRING_DEFAULT);
+        }
+      }
+    }
+    
+    PlistMerging result = new PlistMerging(merged);
+
+    if (executableName != null) {
+      result.setExecutableName(executableName);
+    }
+
+    return result;
   }
 
-  // Assume that if an RFC 1034 format string is specified, the value is RFC 1034 compliant.
   private static String substituteEnvironmentVariable(
       Map<String, String> substitutions, String string) {
     // The substitution is *not* performed recursively.
     for (Map.Entry<String, String> variable : substitutions.entrySet()) {
-      for (String variableNameWithFormatString : withFormatStrings(variable.getKey())) {
-        string = string
-            .replace("${" + variableNameWithFormatString + "}", variable.getValue())
-            .replace("$(" + variableNameWithFormatString + ")", variable.getValue());
-      }
+      String key = variable.getKey();
+      String value = variable.getValue();
+      string = string
+          .replace("${" + key + "}", value)
+          .replace("$(" + key + ")", value);
+      key = key + ":rfc1034identifier";
+      value = convertToRFC1034(value);
+      string = string
+          .replace("${" + key + "}", value)
+          .replace("$(" + key + ")", value);
     }
 
     return string;
   }
 
-  private static ImmutableSet<String> withFormatStrings(String variableName) {
-    return ImmutableSet.of(variableName, variableName + ":rfc1034identifier");
+  // Force RFC1034 compliance by changing any "bad" character to a '-'
+  // This is essentially equivalent to what Xcode does.
+  private static String convertToRFC1034(String value) {
+    return value.replaceAll("[^-0-9A-Za-z.]", "-");
   }
 
   @VisibleForTesting
@@ -274,11 +352,16 @@ public class PlistMerging extends Value<PlistMerging> {
    */
   public PlistMerging setBundleIdentifier(String primaryIdentifier, String fallbackIdentifier) {
     NSString bundleIdentifier = (NSString) merged.get(BUNDLE_IDENTIFIER_PLIST_KEY);
-        
+
     if (primaryIdentifier != null) {
-      merged.put(BUNDLE_IDENTIFIER_PLIST_KEY, primaryIdentifier);
-    } else if (bundleIdentifier == null && fallbackIdentifier != null) {
-      merged.put(BUNDLE_IDENTIFIER_PLIST_KEY, fallbackIdentifier);
+      merged.put(BUNDLE_IDENTIFIER_PLIST_KEY, convertToRFC1034(primaryIdentifier));
+    } else if (bundleIdentifier == null) {
+      if (fallbackIdentifier != null) {
+        merged.put(BUNDLE_IDENTIFIER_PLIST_KEY, convertToRFC1034(fallbackIdentifier));
+      } else {
+        // TODO(bazel-team): We shouldn't be generating an info.plist in this case.
+        merged.put(BUNDLE_IDENTIFIER_PLIST_KEY, BUNDLE_IDENTIFIER_DEFAULT);
+      }
     }
 
     return this;

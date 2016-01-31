@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,9 +17,7 @@ package com.google.devtools.build.lib.cmdline;
 import static com.google.common.truth.Truth.assertThat;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertSame;
-import static org.junit.Assert.fail;
 
-import com.google.devtools.build.lib.cmdline.PackageIdentifier.RepositoryName;
 import com.google.devtools.build.lib.vfs.PathFragment;
 
 import org.junit.Test;
@@ -49,73 +47,25 @@ public class PackageIdentifierTest {
     PackageIdentifier plainA = PackageIdentifier.parse("a");
     assertThat(plainA.getRepository().strippedName()).isEqualTo("");
     assertThat(fooA.getPackageFragment().getPathString()).isEqualTo("a");
-  }
 
-  @Test
-  public void testValidateRepositoryName() throws Exception {
-    // OK:
-    assertEquals("@foo", RepositoryName.create("@foo").toString());
-    assertThat(RepositoryName.create("").toString()).isEmpty();
-    assertEquals("@foo/bar", RepositoryName.create("@foo/bar").toString());
-    assertEquals("@foo.bar", RepositoryName.create("@foo.bar").toString());
-
-    // Bad:
-    try {
-      RepositoryName.create("@");
-      fail();
-    } catch (TargetParsingException expected) {
-      assertThat(expected.getMessage()).contains("empty workspace name");
-    }
-    try {
-      RepositoryName.create("@abc/");
-      fail();
-    } catch (TargetParsingException expected) {
-      assertThat(expected.getMessage()).contains(
-          "workspace names cannot start nor end with '/'");
-    }
-    try {
-      RepositoryName.create("@/abc");
-      fail();
-    } catch (TargetParsingException expected) {
-      assertThat(expected.getMessage()).contains(
-          "workspace names cannot start nor end with '/'");
-    }
-    try {
-      RepositoryName.create("@a//////b");
-      fail();
-    } catch (TargetParsingException expected) {
-      assertThat(expected.getMessage()).contains(
-          "workspace names cannot contain multiple '/'s in a row");
-    }
-    try {
-      RepositoryName.create("@foo@");
-      fail();
-    } catch (TargetParsingException expected) {
-      assertThat(expected.getMessage()).contains(
-          "workspace names may contain only A-Z, a-z, 0-9, '-', '_', '.', and '/'");
-    }
-    try {
-      RepositoryName.create("x");
-      fail();
-    } catch (TargetParsingException expected) {
-      assertThat(expected.getMessage()).contains("workspace name must start with '@'");
-    }
+    PackageIdentifier mainA = PackageIdentifier.parse("@//a");
+    assertThat(mainA.getRepository()).isEqualTo(PackageIdentifier.MAIN_REPOSITORY_NAME);
   }
 
   @Test
   public void testToString() throws Exception {
-    PackageIdentifier local = new PackageIdentifier("", new PathFragment("bar/baz"));
+    PackageIdentifier local = PackageIdentifier.create("", new PathFragment("bar/baz"));
     assertEquals("bar/baz", local.toString());
-    PackageIdentifier external = new PackageIdentifier("@foo", new PathFragment("bar/baz"));
+    PackageIdentifier external = PackageIdentifier.create("@foo", new PathFragment("bar/baz"));
     assertEquals("@foo//bar/baz", external.toString());
   }
 
   @Test
   public void testCompareTo() throws Exception {
-    PackageIdentifier foo1 = new PackageIdentifier("@foo", new PathFragment("bar/baz"));
-    PackageIdentifier foo2 = new PackageIdentifier("@foo", new PathFragment("bar/baz"));
-    PackageIdentifier foo3 = new PackageIdentifier("@foo", new PathFragment("bar/bz"));
-    PackageIdentifier bar = new PackageIdentifier("@bar", new PathFragment("bar/baz"));
+    PackageIdentifier foo1 = PackageIdentifier.create("@foo", new PathFragment("bar/baz"));
+    PackageIdentifier foo2 = PackageIdentifier.create("@foo", new PathFragment("bar/baz"));
+    PackageIdentifier foo3 = PackageIdentifier.create("@foo", new PathFragment("bar/bz"));
+    PackageIdentifier bar = PackageIdentifier.create("@bar", new PathFragment("bar/baz"));
     assertEquals(0, foo1.compareTo(foo2));
     assertThat(foo1.compareTo(foo3)).isLessThan(0);
     assertThat(foo1.compareTo(bar)).isGreaterThan(0);
@@ -124,22 +74,12 @@ public class PackageIdentifierTest {
   @Test
   public void testInvalidPackageName() throws Exception {
     // This shouldn't throw an exception, package names aren't validated.
-    new PackageIdentifier("@foo", new PathFragment("bar.baz"));
-  }
-
-  @Test
-  public void testInvalidRepositoryName() throws Exception {
-    try {
-      new PackageIdentifier("foo", new PathFragment("bar/baz"));
-      fail("'foo' is not a legal repository name");
-    } catch (TargetParsingException expected) {
-      assertThat(expected.getMessage()).contains("workspace name must start with '@'");
-    }
+    PackageIdentifier.create("@foo", new PathFragment("bar.baz"));
   }
 
   @Test
   public void testSerialization() throws Exception {
-    PackageIdentifier inId = new PackageIdentifier("@foo", new PathFragment("bar/baz"));
+    PackageIdentifier inId = PackageIdentifier.create("@foo", new PathFragment("bar/baz"));
     ByteArrayOutputStream data = new ByteArrayOutputStream();
     ObjectOutputStream out = new ObjectOutputStream(data);
     out.writeObject(inId);
@@ -151,8 +91,8 @@ public class PackageIdentifierTest {
   @Test
   public void testPackageFragmentEquality() throws Exception {
     // Make sure package fragments are canonicalized.
-    PackageIdentifier p1 = new PackageIdentifier("@whatever", new PathFragment("foo/bar"));
-    PackageIdentifier p2 = new PackageIdentifier("@whatever", new PathFragment("foo/bar"));
+    PackageIdentifier p1 = PackageIdentifier.create("@whatever", new PathFragment("foo/bar"));
+    PackageIdentifier p2 = PackageIdentifier.create("@whatever", new PathFragment("foo/bar"));
     assertSame(p2.getPackageFragment(), p1.getPackageFragment());
   }
 }

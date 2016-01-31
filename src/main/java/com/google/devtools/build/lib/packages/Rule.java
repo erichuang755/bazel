@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,6 @@
 
 package com.google.devtools.build.lib.packages;
 
-import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
 import com.google.common.base.Predicates;
 import com.google.common.collect.HashMultimap;
@@ -27,17 +26,17 @@ import com.google.common.collect.LinkedListMultimap;
 import com.google.common.collect.ListMultimap;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Multimap;
+import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.events.Location;
-import com.google.devtools.build.lib.packages.Attribute.ConfigurationTransition;
 import com.google.devtools.build.lib.packages.License.DistributionType;
 import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.FuncallExpression;
 import com.google.devtools.build.lib.syntax.GlobList;
-import com.google.devtools.build.lib.syntax.Label;
-import com.google.devtools.build.lib.syntax.Label.SyntaxException;
+import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.util.BinaryPredicate;
+import com.google.devtools.build.lib.util.Preconditions;
 
 import java.util.Collection;
 import java.util.LinkedHashSet;
@@ -60,78 +59,10 @@ import java.util.Set;
  *            deps = ['bar'])
  * </pre>
  */
-public final class Rule implements Target {
-  /** Dependency predicate that includes all dependencies */
-  public static final BinaryPredicate<Rule, Attribute> ALL_DEPS =
-      new BinaryPredicate<Rule, Attribute>() {
-        @Override
-        public boolean apply(Rule x, Attribute y) {
-          return true;
-        }
-      };
-
-  /** Dependency predicate that excludes host dependencies */
-  public static final BinaryPredicate<Rule, Attribute> NO_HOST_DEPS =
-      new BinaryPredicate<Rule, Attribute>() {
-    @Override
-    public boolean apply(Rule rule, Attribute attribute) {
-      // isHostConfiguration() is only defined for labels and label lists.
-      if (attribute.getType() != Type.LABEL && attribute.getType() != Type.LABEL_LIST) {
-        return true;
-      }
-
-      return attribute.getConfigurationTransition() != ConfigurationTransition.HOST;
-    }
-  };
-
-  /** Dependency predicate that excludes implicit dependencies */
-  public static final BinaryPredicate<Rule, Attribute> NO_IMPLICIT_DEPS =
-      new BinaryPredicate<Rule, Attribute>() {
-    @Override
-    public boolean apply(Rule rule, Attribute attribute) {
-      return rule.isAttributeValueExplicitlySpecified(attribute);
-    }
-  };
-
-  /**
-   * Dependency predicate that excludes those edges that are not present in the
-   * configured target graph.
-   */
-  public static final BinaryPredicate<Rule, Attribute> NO_NODEP_ATTRIBUTES =
-      new BinaryPredicate<Rule, Attribute>() {
-    @Override
-    public boolean apply(Rule rule, Attribute attribute) {
-      return attribute.getType() != Type.NODEP_LABEL
-          && attribute.getType() != Type.NODEP_LABEL_LIST;
-    }
-  };
+public final class Rule implements Target, DependencyFilter.AttributeInfoProvider {
 
   /** Label predicate that allows every label. */
   public static final Predicate<Label> ALL_LABELS = Predicates.alwaysTrue();
-
-  /**
-   * Checks to see if the attribute has the isDirectCompileTimeInput property.
-   */
-  public static final BinaryPredicate<Rule, Attribute> DIRECT_COMPILE_TIME_INPUT =
-      new BinaryPredicate<Rule, Attribute>() {
-    @Override
-    public boolean apply(Rule rule, Attribute attribute) {
-      return attribute.isDirectCompileTimeInput();
-    }
-  };
-
-  /**
-   * Returns a predicate that computes the logical and of the two given predicates.
-   */
-  public static <X, Y> BinaryPredicate<X, Y> and(
-      final BinaryPredicate<X, Y> a, final BinaryPredicate<X, Y> b) {
-    return new BinaryPredicate<X, Y>() {
-      @Override
-      public boolean apply(X x, Y y) {
-        return a.apply(x, y) && b.apply(x, y);
-      }
-    };
-  }
 
   private final Label label;
 
@@ -148,23 +79,21 @@ public final class Rule implements Target {
 
   private final Location location;
 
-  private final FuncallExpression ast; // may be null
-
   private final String workspaceName;
 
   // Initialized in the call to populateOutputFiles.
   private List<OutputFile> outputFiles;
   private ListMultimap<String, OutputFile> outputFileMap;
 
-  Rule(Package pkg, Label label, RuleClass ruleClass, FuncallExpression ast, Location location) {
+  Rule(Package pkg, Label label, RuleClass ruleClass, Location location,
+      AttributeContainer attributeContainer) {
     this.pkg = Preconditions.checkNotNull(pkg);
     this.label = label;
     this.ruleClass = Preconditions.checkNotNull(ruleClass);
     this.location = Preconditions.checkNotNull(location);
-    this.attributes = new AttributeContainer(ruleClass);
+    this.attributes = attributeContainer;
     this.attributeMap = new RawAttributeMapper(pkg, ruleClass, label, attributes);
     this.containsErrors = false;
-    this.ast = ast;
     this.workspaceName = pkg.getWorkspaceName();
   }
 
@@ -184,10 +113,6 @@ public final class Rule implements Target {
     attributes.setAttributeLocation(attrIndex, location);
   }
 
-  void setAttributeLocation(Attribute attribute, Location location) {
-    attributes.setAttributeLocation(attribute, location);
-  }
-
   void setContainsErrors() {
     this.containsErrors = true;
   }
@@ -201,12 +126,12 @@ public final class Rule implements Target {
 
   @Override
   public Label getLabel() {
-    return attributeMap.getLabel();
+    return label;
   }
 
   @Override
   public String getName() {
-    return attributeMap.getName();
+    return label.getName();
   }
 
   @Override
@@ -247,15 +172,6 @@ public final class Rule implements Target {
     return ruleClass.getName().equals("genrule") // this is unfortunate...
         ? NonconfigurableAttributeMapper.of(this).get("output_to_bindir", Type.BOOLEAN)
         : ruleClass.hasBinaryOutput();
-  }
-
-  /**
-   * Returns the AST for this rule.  Returns null if the package factory chose
-   * not to retain the AST when evaluateBuildFile was called for this rule's
-   * package.
-   */
-  public FuncallExpression getSyntaxTree() {
-    return ast;
   }
 
   /**
@@ -390,11 +306,7 @@ public final class Rule implements Target {
     return ruleClass.hasAttr(attrName, type);
   }
 
-  /**
-   * Returns true iff the value of the specified attribute is explicitly set in
-   * the BUILD file (as opposed to its default value). This also returns true if
-   * the value from the BUILD file is the same as the default value.
-   */
+  @Override
   public boolean isAttributeValueExplicitlySpecified(Attribute attribute) {
     return attributes.isAttributeValueExplicitlySpecified(attribute);
   }
@@ -411,10 +323,41 @@ public final class Rule implements Target {
 
   /**
    * Returns the location of the attribute definition for this rule, if known;
-   * or the location of the whole rule otherwise.  "attrName" need not be a
+   * or the location of the whole rule otherwise. "attrName" need not be a
    * valid attribute name for this rule.
+   * 
+   * <p>This method ignores whether the present rule was created by a macro or not.
+   */
+  public Location getAttributeLocationWithoutMacro(String attrName) {
+    return getAttributeLocation(attrName, false /* useBuildLocation */);
+  }
+
+  /**
+   * Returns the location of the attribute definition for this rule, if known;
+   * or the location of the whole rule otherwise. "attrName" need not be a
+   * valid attribute name for this rule.
+   *
+   * <p>If this rule was created by a macro, this method returns the
+   * location of the macro invocation in the BUILD file instead.
    */
   public Location getAttributeLocation(String attrName) {
+    return getAttributeLocation(attrName, true /* useBuildLocation */);
+  }
+
+  private Location getAttributeLocation(String attrName, boolean useBuildLocation) {
+    /*
+     * If the rule was created by a macro, we have to deal with two locations: one in the BUILD
+     * file where the macro is invoked and one in the bzl file where the rule is created.
+     * For error reporting, we are usually more interested in the former one.
+     * Different methods in this class refer to different locations, though:
+     * - getLocation() points to the location of the macro invocation in the BUILD file (thanks to
+     *   RuleFactory).
+     * - attributes.getAttributeLocation() points to the location in the bzl file.
+     */
+    if (wasCreatedByMacro() && useBuildLocation) {
+      return getLocation();
+    }
+
     Location attrLocation = null;
     if (!attrName.equals("name")) {
       attrLocation = attributes.getAttributeLocation(attrName);
@@ -423,10 +366,25 @@ public final class Rule implements Target {
   }
 
   /**
+   * Returns whether this rule was created by a macro.
+   */
+  public boolean wasCreatedByMacro() {
+    return hasStringAttribute("generator_name") || hasStringAttribute("generator_function");
+  }
+
+  private boolean hasStringAttribute(String attrName) {
+    Object value = attributes.getAttr(attrName);
+    if (value != null && value instanceof String) {
+      return !((String) value).isEmpty();
+    }
+    return false;
+  }
+
+  /**
    * Returns a new List instance containing all direct dependencies (all types).
    */
   public Collection<Label> getLabels() {
-    return getLabels(Rule.ALL_DEPS);
+    return getLabels(DependencyFilter.ALL_DEPS);
   }
 
   /**
@@ -438,7 +396,7 @@ public final class Rule implements Target {
    *     the attribute that contains the label. The label will be contained in the
    *     result iff (the predicate returned {@code true} and the labels are not outputs)
    */
-  public Collection<Label> getLabels(final BinaryPredicate<Rule, Attribute> predicate) {
+  public Collection<Label> getLabels(BinaryPredicate<? super Rule, Attribute> predicate) {
     return ImmutableSortedSet.copyOf(getTransitions(predicate).values());
   }
 
@@ -452,7 +410,7 @@ public final class Rule implements Target {
    *     result iff (the predicate returned {@code true} and the labels are not outputs)
    */
   public Multimap<Attribute, Label> getTransitions(
-      final BinaryPredicate<Rule, Attribute> predicate) {
+      final BinaryPredicate<? super Rule, Attribute> predicate) {
     final Multimap<Attribute, Label> transitions = HashMultimap.create();
     // TODO(bazel-team): move this to AttributeMap, too. Just like visitLabels, which labels should
     // be visited may depend on the calling context. We shouldn't implicitly decide this for
@@ -484,7 +442,7 @@ public final class Rule implements Target {
    * will retain the relative order in which they were declared.
    */
   void populateOutputFiles(EventHandler eventHandler, Package.Builder pkgBuilder)
-      throws SyntaxException, InterruptedException {
+      throws LabelSyntaxException, InterruptedException {
     Preconditions.checkState(outputFiles == null);
     // Order is important here: implicit before explicit
     outputFiles = Lists.newArrayList();
@@ -496,19 +454,19 @@ public final class Rule implements Target {
   }
 
   // Explicit output files are user-specified attributes of type OUTPUT.
-  private void populateExplicitOutputFiles(EventHandler eventHandler) throws SyntaxException {
+  private void populateExplicitOutputFiles(EventHandler eventHandler) throws LabelSyntaxException {
     NonconfigurableAttributeMapper nonConfigurableAttributes =
         NonconfigurableAttributeMapper.of(this);
     for (Attribute attribute : ruleClass.getAttributes()) {
       String name = attribute.getName();
       Type<?> type = attribute.getType();
-      if (type == Type.OUTPUT) {
-        Label outputLabel = nonConfigurableAttributes.get(name, Type.OUTPUT);
+      if (type == BuildType.OUTPUT) {
+        Label outputLabel = nonConfigurableAttributes.get(name, BuildType.OUTPUT);
         if (outputLabel != null) {
           addLabelOutput(attribute, outputLabel, eventHandler);
         }
-      } else if (type == Type.OUTPUT_LIST) {
-        for (Label label : nonConfigurableAttributes.get(name, Type.OUTPUT_LIST)) {
+      } else if (type == BuildType.OUTPUT_LIST) {
+        for (Label label : nonConfigurableAttributes.get(name, BuildType.OUTPUT_LIST)) {
           addLabelOutput(attribute, label, eventHandler);
         }
       }
@@ -525,7 +483,7 @@ public final class Rule implements Target {
       for (String out : ruleClass.getImplicitOutputsFunction().getImplicitOutputs(attributeMap)) {
         try {
           addOutputFile(pkgBuilder.createLabel(out), eventHandler);
-        } catch (SyntaxException e) {
+        } catch (LabelSyntaxException e) {
           reportError("illegal output file name '" + out + "' in rule "
                       + getLabel(), eventHandler);
         }
@@ -536,7 +494,7 @@ public final class Rule implements Target {
   }
 
   private void addLabelOutput(Attribute attribute, Label label, EventHandler eventHandler)
-      throws SyntaxException {
+      throws LabelSyntaxException {
     if (!label.getPackageIdentifier().equals(pkg.getPackageIdentifier())) {
       throw new IllegalStateException("Label for attribute " + attribute
           + " should refer to '" + pkg.getName()
@@ -544,7 +502,7 @@ public final class Rule implements Target {
           + "' (label '" + label.getName() + "')");
     }
     if (label.getName().equals(".")) {
-      throw new SyntaxException("output file name can't be equal '.'");
+      throw new LabelSyntaxException("output file name can't be equal '.'");
     }
     OutputFile outputFile = addOutputFile(label, eventHandler);
     outputFileMap.put(attribute.getName(), outputFile);
@@ -569,11 +527,6 @@ public final class Rule implements Target {
 
   void reportWarning(String message, EventHandler eventHandler) {
     eventHandler.handle(Event.warn(location, message));
-  }
-
-  @Override
-  public int hashCode() {
-    return label.hashCode();
   }
 
   /**
@@ -611,11 +564,16 @@ public final class Rule implements Target {
   }
 
   @Override
+  public boolean isConfigurable() {
+    return true;
+  }
+
+  @Override
   @SuppressWarnings("unchecked")
   public Set<DistributionType> getDistributions() {
-    if (isAttrDefined("distribs", Type.DISTRIBUTIONS)
+    if (isAttrDefined("distribs", BuildType.DISTRIBUTIONS)
         && isAttributeValueExplicitlySpecified("distribs")) {
-      return NonconfigurableAttributeMapper.of(this).get("distribs", Type.DISTRIBUTIONS);
+      return NonconfigurableAttributeMapper.of(this).get("distribs", BuildType.DISTRIBUTIONS);
     } else {
       return getPackage().getDefaultDistribs();
     }
@@ -623,9 +581,9 @@ public final class Rule implements Target {
 
   @Override
   public License getLicense() {
-    if (isAttrDefined("licenses", Type.LICENSE)
+    if (isAttrDefined("licenses", BuildType.LICENSE)
         && isAttributeValueExplicitlySpecified("licenses")) {
-      return NonconfigurableAttributeMapper.of(this).get("licenses", Type.LICENSE);
+      return NonconfigurableAttributeMapper.of(this).get("licenses", BuildType.LICENSE);
     } else {
       return getPackage().getDefaultLicense();
     }
@@ -636,9 +594,9 @@ public final class Rule implements Target {
    * null if it is not specified.
    */
   public License getToolOutputLicense(AttributeMap attributes) {
-    if (isAttrDefined("output_licenses", Type.LICENSE)
+    if (isAttrDefined("output_licenses", BuildType.LICENSE)
         && attributes.isAttributeValueExplicitlySpecified("output_licenses")) {
-      return attributes.get("output_licenses", Type.LICENSE);
+      return attributes.get("output_licenses", BuildType.LICENSE);
     } else {
       return null;
     }
@@ -702,14 +660,11 @@ public final class Rule implements Target {
    * Computes labels of additional dependencies that can be provided by aspects that this rule
    * can require from its direct dependencies.
    */
-  public Collection<? extends Label> getAspectLabelsSuperset(
-      BinaryPredicate<Rule, Attribute> predicate) {
+  public Collection<? extends Label> getAspectLabelsSuperset(DependencyFilter predicate) {
     LinkedHashMultimap<Attribute, Label> labels = LinkedHashMultimap.create();
     for (Attribute attribute : this.getAttributes()) {
-      for (Class<? extends AspectFactory<?, ?, ?>> candidateClass : attribute.getAspects()) {
-        AspectFactory<?, ?, ?> candidate = AspectFactory.Util.create(candidateClass);
-        AspectDefinition.addAllAttributesOfAspect(Rule.this, labels,
-            candidate.getDefinition(), predicate);
+      for (Aspect candidateClass : attribute.getAspects(this)) {
+        AspectDefinition.addAllAttributesOfAspect(Rule.this, labels, candidateClass, predicate);
       }
     }
     return labels.values();

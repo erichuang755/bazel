@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,13 +15,15 @@
 package com.google.devtools.build.lib.bazel.rules.workspace;
 
 import static com.google.devtools.build.lib.packages.Attribute.attr;
-import static com.google.devtools.build.lib.packages.Type.STRING;
+import static com.google.devtools.build.lib.syntax.Type.STRING;
 
 import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
 import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.packages.RuleClass.Builder;
 import com.google.devtools.build.lib.packages.RuleClass.Builder.RuleClassType;
+import com.google.devtools.build.lib.rules.repository.WorkspaceBaseRule;
+import com.google.devtools.build.lib.rules.repository.WorkspaceConfiguredTargetFactory;
 
 /**
  * Rule definition for the http_jar rule.
@@ -35,14 +37,12 @@ public class HttpJarRule implements RuleDefinition {
     return builder
         /* <!-- #BLAZE_RULE(http_jar).ATTRIBUTE(url) -->
         A URL to an archive file containing a Bazel repository.
-        ${SYNOPSIS}
 
         <p>This must be an http or https URL that ends with .jar. Redirections are followed.</p>
         <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
         .add(attr("url", STRING).mandatory())
         /* <!-- #BLAZE_RULE(http_jar).ATTRIBUTE(sha256) -->
         The expected SHA-256 of the file downloaded.
-        ${SYNOPSIS}
 
         <p>This must match the SHA-256 of the file downloaded.</p>
         <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
@@ -63,13 +63,9 @@ public class HttpJarRule implements RuleDefinition {
 }
 /*<!-- #BLAZE_RULE (NAME = http_jar, TYPE = OTHER, FAMILY = Workspace)[GENERIC_RULE] -->
 
-${ATTRIBUTE_SIGNATURE}
-
 <p>Downloads a jar from a URL and makes it available to be used as a Java dependency.</p>
 
 <p>Downloaded files must have a .jar extension.</p>
-
-${ATTRIBUTE_DEFINITION}
 
 <h4 id="http_jar_examples">Examples</h4>
 

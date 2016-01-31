@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,7 +17,6 @@ package com.google.devtools.build.lib.rules.java;
 import static com.google.devtools.build.lib.analysis.config.BuildConfiguration.StrictDepsMode.OFF;
 
 import com.google.common.base.Function;
-import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.UnmodifiableIterator;
@@ -30,6 +29,7 @@ import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.TransitiveInfoProvider;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration.StrictDepsMode;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.rules.cpp.CcLinkParams.Builder;
@@ -37,8 +37,8 @@ import com.google.devtools.build.lib.rules.cpp.CcLinkParamsProvider;
 import com.google.devtools.build.lib.rules.cpp.CcLinkParamsStore;
 import com.google.devtools.build.lib.rules.cpp.CcSpecificLinkParamsProvider;
 import com.google.devtools.build.lib.rules.java.JavaConfiguration.JavaClasspathMode;
-import com.google.devtools.build.lib.syntax.Label;
 import com.google.devtools.build.lib.util.FileType;
+import com.google.devtools.build.lib.util.Preconditions;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -189,7 +189,7 @@ public final class JavaLibraryHelper {
   public JavaLibraryHelper addDeps(Iterable<? extends TransitiveInfoCollection> deps) {
     for (TransitiveInfoCollection dep : deps) {
       Preconditions.checkArgument(dep.getConfiguration() == null
-          || dep.getConfiguration().equals(configuration));
+          || configuration.equalsOrIsSupersetOf(dep.getConfiguration()));
       this.deps.add(dep);
     }
     return this;
@@ -244,7 +244,7 @@ public final class JavaLibraryHelper {
     attributes.setTargetLabel(ruleContext.getLabel());
 
     if (isStrict() && classpathMode != JavaClasspathMode.OFF) {
-      addDependencyArtifactsToAttributes(attributes);
+      JavaCompilationHelper.addDependencyArtifactsToAttributes(attributes, transformDeps());
     }
 
     JavaCompilationArtifacts.Builder artifactsBuilder = new JavaCompilationArtifacts.Builder();
@@ -257,7 +257,7 @@ public final class JavaLibraryHelper {
         null /* gensrcOutputJar */,
         outputDepsProto,
         null /* outputMetadata */);
-    helper.createCompileTimeJarAction(output, outputDepsProto, artifactsBuilder);
+    helper.createCompileTimeJarAction(output, artifactsBuilder);
     artifactsBuilder.addRuntimeJar(output);
     JavaCompilationArtifacts compilationArtifacts = artifactsBuilder.build();
 
@@ -296,17 +296,6 @@ public final class JavaLibraryHelper {
     JavaCompilationArgs.Builder builder = JavaCompilationArgs.builder();
     builder.addTransitiveDependencies(transformDeps(), false);
     return builder.build().getCompileTimeJars();
-  }
-
-  private void addDependencyArtifactsToAttributes(JavaTargetAttributes.Builder attributes) {
-    NestedSetBuilder<Artifact> compileTimeBuilder = NestedSetBuilder.stableOrder();
-    NestedSetBuilder<Artifact> runTimeBuilder = NestedSetBuilder.stableOrder();
-    for (JavaCompilationArgsProvider dep : transformDeps()) {
-      compileTimeBuilder.addTransitive(dep.getCompileTimeJavaDependencyArtifacts());
-      runTimeBuilder.addTransitive(dep.getRunTimeJavaDependencyArtifacts());
-    }
-    attributes.addCompileTimeDependencyArtifacts(compileTimeBuilder.build());
-    attributes.addRuntimeDependencyArtifacts(runTimeBuilder.build());
   }
 
   private Iterable<JavaCompilationArgsProvider> transformDeps() {

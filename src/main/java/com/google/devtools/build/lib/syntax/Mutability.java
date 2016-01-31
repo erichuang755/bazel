@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 // limitations under the License.
 package com.google.devtools.build.lib.syntax;
 
-import com.google.common.base.Preconditions;
+import com.google.devtools.build.lib.util.Preconditions;
 
 import java.io.Serializable;
 
@@ -36,7 +36,7 @@ import java.io.Serializable;
  * by arbitrarily many threads.
  *
  * <p>The safe usage of a Mutability requires to always use try-with-resource style:
- * <code>try(Mutability mutability = Mutability.create(fmt, ...)) { ... }</code>
+ * <code>try (Mutability mutability = Mutability.create(fmt, ...)) { ... }</code>
  * Thus, you can create a Mutability, build an {@link Environment}, mutate that {@link Environment}
  * and create mutable objects as you evaluate in that {@link Environment}, and finally return the
  * resulting {@link Environment}, at which point the resource is closed, and the {@link Environment}
@@ -93,6 +93,15 @@ public final class Mutability implements AutoCloseable, Serializable {
   }
 
   /**
+   * Freezes this Mutability
+   * @return it in fluent style.
+   */
+  public Mutability freeze() {
+    close();
+    return this;
+  }
+
+  /**
    * A MutabilityException will be thrown when the user attempts to mutate an object he shouldn't.
    */
   static class MutabilityException extends Exception {
@@ -137,4 +146,6 @@ public final class Mutability implements AutoCloseable, Serializable {
       throw new AssertionError("trying to mutate an object from a different context");
     }
   }
+
+  public static final Mutability IMMUTABLE = create("IMMUTABLE").freeze();
 }

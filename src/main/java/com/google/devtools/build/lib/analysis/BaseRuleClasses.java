@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,20 +17,23 @@ package com.google.devtools.build.lib.analysis;
 import static com.google.devtools.build.lib.packages.Attribute.ConfigurationTransition.DATA;
 import static com.google.devtools.build.lib.packages.Attribute.ConfigurationTransition.HOST;
 import static com.google.devtools.build.lib.packages.Attribute.attr;
-import static com.google.devtools.build.lib.packages.Type.BOOLEAN;
-import static com.google.devtools.build.lib.packages.Type.DISTRIBUTIONS;
-import static com.google.devtools.build.lib.packages.Type.INTEGER;
-import static com.google.devtools.build.lib.packages.Type.LABEL;
-import static com.google.devtools.build.lib.packages.Type.LABEL_LIST;
-import static com.google.devtools.build.lib.packages.Type.LICENSE;
-import static com.google.devtools.build.lib.packages.Type.NODEP_LABEL_LIST;
-import static com.google.devtools.build.lib.packages.Type.STRING;
-import static com.google.devtools.build.lib.packages.Type.STRING_LIST;
+import static com.google.devtools.build.lib.packages.BuildType.DISTRIBUTIONS;
+import static com.google.devtools.build.lib.packages.BuildType.LABEL;
+import static com.google.devtools.build.lib.packages.BuildType.LABEL_LIST;
+import static com.google.devtools.build.lib.packages.BuildType.LICENSE;
+import static com.google.devtools.build.lib.packages.BuildType.NODEP_LABEL_LIST;
+import static com.google.devtools.build.lib.syntax.Type.BOOLEAN;
+import static com.google.devtools.build.lib.syntax.Type.INTEGER;
+import static com.google.devtools.build.lib.syntax.Type.STRING;
+import static com.google.devtools.build.lib.syntax.Type.STRING_LIST;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
+import com.google.devtools.build.lib.Constants;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.RunUnder;
 import com.google.devtools.build.lib.analysis.constraints.EnvironmentRule;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.Attribute.LateBoundLabel;
 import com.google.devtools.build.lib.packages.Attribute.LateBoundLabelList;
@@ -40,8 +43,7 @@ import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.packages.RuleClass.Builder;
 import com.google.devtools.build.lib.packages.RuleClass.Builder.RuleClassType;
 import com.google.devtools.build.lib.packages.TestSize;
-import com.google.devtools.build.lib.packages.Type;
-import com.google.devtools.build.lib.syntax.Label;
+import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.util.FileTypeSet;
 
 import java.util.List;
@@ -76,7 +78,8 @@ public class BaseRuleClasses {
   /**
    * Implementation for the :action_listener attribute.
    */
-  private static final LateBoundLabelList<BuildConfiguration> ACTION_LISTENER =
+  @VisibleForTesting
+  static final LateBoundLabelList<BuildConfiguration> ACTION_LISTENER =
       new LateBoundLabelList<BuildConfiguration>() {
     @Override
     public List<Label> getDefault(Rule rule, BuildConfiguration configuration) {
@@ -162,7 +165,7 @@ public class BaseRuleClasses {
           .add(attr("args", STRING_LIST)
               .nonconfigurable("policy decision: should be consistent across configurations"))
           .add(attr("$test_runtime", LABEL_LIST).cfg(HOST).value(ImmutableList.of(
-              env.getLabel("//tools/test:runtime"))))
+              env.getLabel(Constants.TOOLS_REPOSITORY + "//tools/test:runtime"))))
 
           // TODO(bazel-team): TestActions may need to be run with coverage, so all tests
           // implicitly depend on crosstool, which provides gcov.  We could add gcov to
@@ -176,7 +179,7 @@ public class BaseRuleClasses {
           // The target itself and run_under both run on the same machine. We use the DATA config
           // here because the run_under acts like a data dependency (e.g. no LIPO optimization).
           .add(attr(":run_under", LABEL).cfg(DATA).value(RUN_UNDER)
-              .skipConstraintsCheck())
+              .skipPrereqValidatorCheck())
           .build();
     }
 

@@ -90,23 +90,40 @@ java_toolchain(
     name = "toolchain",
     encoding = "UTF-8",
     jvm_opts = ["-client"],
-    source_version = "7",
-    target_version = "7",
+    source_version = "8",
+    target_version = "8",
 )
-
-exports_files([
-    "JavaBuilder_deploy.jar",
-    "ijar",
-    "SingleJar_deploy.jar",
-    "GenClass_deploy.jar",
-])
 
 filegroup(
     name = "srcs",
-    srcs = ["BUILD"],  # Tools are build from the workspace for tests.
+    srcs = [
+        "BUILD",  # Tools are build from the workspace for tests.
+        "proguard_whitelister.py",
+        "proguard_whitelister_test.py",
+        "proguard_whitelister_test_input.cfg",
+    ],
 )
 
 filegroup(
     name = "package-srcs",
     srcs = glob(["**"]),
+)
+
+py_binary(
+    name = "proguard_whitelister",
+    srcs = [
+        "proguard_whitelister.py",
+    ],
+    deps = [
+        "//third_party/py/gflags",
+    ],
+)
+
+py_test(
+    name = "proguard_whitelister_test",
+    srcs = ["proguard_whitelister_test.py"],
+    data = ["proguard_whitelister_test_input.cfg"],
+    deps = [
+        ":proguard_whitelister",
+    ],
 )

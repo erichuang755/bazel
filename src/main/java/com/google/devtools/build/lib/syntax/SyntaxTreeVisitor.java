@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -40,7 +40,7 @@ public class SyntaxTreeVisitor {
     visit(node.getValue());
   }
 
-  public void visit(Parameter node) {
+  public void visit(@SuppressWarnings("unused") Parameter<?, ?> node) {
     // leaf node (we need the function for overrides)
   }
 
@@ -55,28 +55,30 @@ public class SyntaxTreeVisitor {
   }
 
   public void visit(FuncallExpression node) {
+    if (node.getObject() != null) {
+      visit(node.getObject());
+    }
     visit(node.getFunction());
     visitAll(node.getArguments());
   }
 
-  public void visit(Identifier node) {
-  }
+  public void visit(@SuppressWarnings("unused") Identifier node) {}
 
-  public void visit(ListComprehension node) {
-    visit(node.getElementExpression());
+  public void visit(AbstractComprehension node) {
+    visitAll(node.getOutputExpressions());
+
     for (ListComprehension.Clause clause : node.getClauses()) {
       if (clause.getLValue() != null) {
-        visit(clause.getLValue().getExpression());
+        visit(clause.getLValue());
       }
       visit(clause.getExpression());
     }
   }
 
-  public void accept(DictComprehension node) {
-    visit(node.getKeyExpression());
-    visit(node.getValueExpression());
-    visit(node.getLoopVar().getExpression());
-    visit(node.getListExpression());
+  public void visit(ForStatement node) {
+    visit(node.getVariable().getExpression());
+    visit(node.getCollection());
+    visitAll(node.block());
   }
 
   public void visit(LoadStatement node) {
@@ -87,14 +89,16 @@ public class SyntaxTreeVisitor {
     visitAll(node.getElements());
   }
 
-  public void visit(IntegerLiteral node) {
-  }
+  public void visit(@SuppressWarnings("unused") IntegerLiteral node) {}
 
-  public void visit(StringLiteral node) {
+  public void visit(@SuppressWarnings("unused") StringLiteral node) {}
+
+  public void visit(LValue node) {
+    visit(node.getExpression());
   }
 
   public void visit(AssignmentStatement node) {
-    visit(node.getLValue().getExpression());
+    visit(node.getLValue());
     visit(node.getExpression());
   }
 
@@ -114,10 +118,7 @@ public class SyntaxTreeVisitor {
 
   public void visit(FunctionDefStatement node) {
     visit(node.getIdent());
-    List<Expression> defaults = node.getSignature().getDefaultValues();
-    if (defaults != null) {
-      visitAll(defaults);
-    }
+    visitAll(node.getParameters());
     visitAll(node.getStatements());
   }
 
@@ -138,8 +139,12 @@ public class SyntaxTreeVisitor {
     visit(node.getExpression());
   }
 
-  public void visit(Comment node) {
+  public void visit(DotExpression node) {
+    visit(node.getObj());
+    visit(node.getField());
   }
+
+  public void visit(@SuppressWarnings("unused") Comment node) {}
 
   public void visit(ConditionalExpression node) {
     visit(node.getThenCase());

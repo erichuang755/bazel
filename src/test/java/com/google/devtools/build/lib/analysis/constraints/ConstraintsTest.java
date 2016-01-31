@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,32 +14,39 @@
 package com.google.devtools.build.lib.analysis.constraints;
 
 import static com.google.common.truth.Truth.assertThat;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 
 import com.google.devtools.build.lib.analysis.BaseRuleClasses;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
 import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.Attribute;
+import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.packages.RuleClass.Builder;
-import com.google.devtools.build.lib.packages.Type;
-import com.google.devtools.build.lib.syntax.Label;
 import com.google.devtools.build.lib.testutil.TestRuleClassProvider;
 import com.google.devtools.build.lib.testutil.UnknownRuleConfiguredTarget;
 import com.google.devtools.build.lib.util.FileTypeSet;
+
+import org.junit.Before;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.JUnit4;
 
 import java.util.Set;
 
 /**
  * Tests for the constraint enforcement system.
  */
+@RunWith(JUnit4.class)
 public class ConstraintsTest extends AbstractConstraintsTest {
 
-  @Override
-  public void setUp() throws Exception {
-    super.setUp();
+  @Before
+  public final void createBuildFile() throws Exception {
     // Support files for RuleClassWithImplicitAndLateBoundDefaults:
     scratch.file("helpers/BUILD",
         "sh_library(name = 'implicit', srcs = ['implicit.sh'])",
@@ -56,8 +63,8 @@ public class ConstraintsTest extends AbstractConstraintsTest {
     public RuleClass build(Builder builder, RuleDefinitionEnvironment env) {
       return builder
           .setUndocumented()
-          .compatibleWith(env.getLabel("//rule_class_compat:b"))
-          .restrictedTo(env.getLabel("//rule_class_restrict:d"))
+          .compatibleWith(env.getLabel("//buildenv/rule_class_compat:b"))
+          .restrictedTo(env.getLabel("//buildenv/rule_class_restrict:d"))
           .build();
     }
 
@@ -82,8 +89,8 @@ public class ConstraintsTest extends AbstractConstraintsTest {
           .setUndocumented()
           // These defaults are invalid since compatibleWith and restrictedTo can't mix
           // environments from the same group.
-          .compatibleWith(env.getLabel("//rule_class_compat:a"))
-          .restrictedTo(env.getLabel("//rule_class_compat:b"))
+          .compatibleWith(env.getLabel("//buildenv/rule_class_compat:a"))
+          .restrictedTo(env.getLabel("//buildenv/rule_class_compat:b"))
           .build();
     }
 
@@ -102,9 +109,9 @@ public class ConstraintsTest extends AbstractConstraintsTest {
     public RuleClass build(Builder builder, RuleDefinitionEnvironment env) {
       return builder
           .setUndocumented()
-          .add(Attribute.attr("$implicit", Type.LABEL)
+          .add(Attribute.attr("$implicit", BuildType.LABEL)
               .value(Label.parseAbsoluteUnchecked("//helpers:implicit")))
-          .add(Attribute.attr(":latebound", Type.LABEL)
+          .add(Attribute.attr(":latebound", BuildType.LABEL)
               .value(
                   new Attribute.LateBoundLabel<BuildConfiguration>() {
                     @Override
@@ -112,7 +119,7 @@ public class ConstraintsTest extends AbstractConstraintsTest {
                       return Label.parseAbsoluteUnchecked("//helpers:latebound");
                     }
                   }))
-          .add(Attribute.attr("normal", Type.LABEL)
+          .add(Attribute.attr("normal", BuildType.LABEL)
               .allowedFileTypes(FileTypeSet.NO_FILE)
               .value(Label.parseAbsoluteUnchecked("//helpers:default")))
           .build();
@@ -122,6 +129,27 @@ public class ConstraintsTest extends AbstractConstraintsTest {
     public Metadata getMetadata() {
       return RuleDefinition.Metadata.builder()
           .name("rule_with_implicit_and_latebound_deps")
+          .ancestors(BaseRuleClasses.RuleBase.class)
+          .factoryClass(UnknownRuleConfiguredTarget.class)
+          .build();
+    }
+  }
+
+  private static final class RuleClassWithEnforcedImplicitAttribute implements RuleDefinition {
+    @Override
+    public RuleClass build(Builder builder, RuleDefinitionEnvironment env) {
+      return builder
+          .setUndocumented()
+          .add(Attribute.attr("$implicit", BuildType.LABEL)
+              .value(Label.parseAbsoluteUnchecked("//helpers:implicit"))
+              .checkConstraints())
+          .build();
+    }
+
+    @Override
+    public Metadata getMetadata() {
+      return RuleDefinition.Metadata.builder()
+          .name("rule_with_enforced_implicit_deps")
           .ancestors(BaseRuleClasses.RuleBase.class)
           .factoryClass(UnknownRuleConfiguredTarget.class)
           .build();
@@ -157,6 +185,7 @@ public class ConstraintsTest extends AbstractConstraintsTest {
     builder.addRuleDefinition(new RuleClassDefaultRule());
     builder.addRuleDefinition(new BadRuleClassDefaultRule());
     builder.addRuleDefinition(new RuleClassWithImplicitAndLateBoundDefaults());
+    builder.addRuleDefinition(new RuleClassWithEnforcedImplicitAttribute());
     builder.addRuleDefinition(new ConstraintExemptRuleClass());
     return builder.build();
   }
@@ -165,18 +194,19 @@ public class ConstraintsTest extends AbstractConstraintsTest {
    * Writes the environments and environment groups referred to by the rule class defaults.
    */
   private void writeRuleClassDefaultEnvironments() throws Exception {
-    new EnvironmentGroupMaker("rule_class_compat").setEnvironments("a", "b").setDefaults("a")
-        .make();
-    new EnvironmentGroupMaker("rule_class_restrict").setEnvironments("c", "d").setDefaults("c")
-        .make();
+    new EnvironmentGroupMaker("buildenv/rule_class_compat").setEnvironments("a", "b")
+        .setDefaults("a").make();
+    new EnvironmentGroupMaker("buildenv/rule_class_restrict").setEnvironments("c", "d")
+        .setDefaults("c").make();
   }
 
   /**
    * By default, a rule *implicitly* supports all defaults, meaning the explicitly known
    * environment set is empty.
    */
+  @Test
   public void testDefaultSupportedEnvironments() throws Exception {
-    new EnvironmentGroupMaker("foo_env").setEnvironments("a", "b").setDefaults("a").make();
+    new EnvironmentGroupMaker("buildenv/foo").setEnvironments("a", "b").setDefaults("a").make();
     String ruleDef = getDependencyRule();
     assertThat(supportedEnvironments("dep", ruleDef)).isEmpty();
   }
@@ -184,28 +214,33 @@ public class ConstraintsTest extends AbstractConstraintsTest {
   /**
    * "Constraining" a rule's environments explicitly sets them.
    */
+  @Test
   public void testConstrainedSupportedEnvironments() throws Exception {
-    new EnvironmentGroupMaker("foo_env").setEnvironments("a", "b", "c").setDefaults("a").make();
-    String ruleDef = getDependencyRule(constrainedTo("//foo_env:c"));
+    new EnvironmentGroupMaker("buildenv/foo").setEnvironments("a", "b", "c").setDefaults("a")
+        .make();
+    String ruleDef = getDependencyRule(constrainedTo("//buildenv/foo:c"));
     assertThat(supportedEnvironments("dep", ruleDef))
-        .containsExactlyElementsIn(asLabelSet("//foo_env:c"));
+        .containsExactlyElementsIn(asLabelSet("//buildenv/foo:c"));
   }
 
   /**
    * Specifying compatibility adds the specified environments to the defaults.
    */
+  @Test
   public void testCompatibleSupportedEnvironments() throws Exception {
-    new EnvironmentGroupMaker("foo_env").setEnvironments("a", "b", "c").setDefaults("a").make();
-    String ruleDef = getDependencyRule(compatibleWith("//foo_env:c"));
+    new EnvironmentGroupMaker("buildenv/foo").setEnvironments("a", "b", "c").setDefaults("a")
+        .make();
+    String ruleDef = getDependencyRule(compatibleWith("//buildenv/foo:c"));
     assertThat(supportedEnvironments("dep", ruleDef))
-        .containsExactlyElementsIn(asLabelSet("//foo_env:a", "//foo_env:c"));
+        .containsExactlyElementsIn(asLabelSet("//buildenv/foo:a", "//buildenv/foo:c"));
   }
 
   /**
    * A rule can't support *no* environments.
    */
+  @Test
   public void testSupportedEnvironmentsConstrainedtoNothing() throws Exception {
-    new EnvironmentGroupMaker("foo_env").setEnvironments("a", "b").setDefaults("a").make();
+    new EnvironmentGroupMaker("buildenv/foo").setEnvironments("a", "b").setDefaults("a").make();
     reporter.removeHandler(failFastHandler);
     String ruleDef = getDependencyRule(constrainedTo());
     assertNull(scratchConfiguredTarget("hello", "dep", ruleDef));
@@ -215,59 +250,69 @@ public class ConstraintsTest extends AbstractConstraintsTest {
   /**
    * Restrict the environments within one group, declare compatibility for another.
    */
+  @Test
   public void testSupportedEnvironmentsInMultipleGroups() throws Exception {
-    new EnvironmentGroupMaker("foo_env").setEnvironments("a", "b").setDefaults("a").make();
-    new EnvironmentGroupMaker("bar_env").setEnvironments("c", "d").setDefaults("c").make();
-    String ruleDef = getDependencyRule(constrainedTo("//foo_env:b"), compatibleWith("//bar_env:d"));
+    new EnvironmentGroupMaker("buildenv/foo").setEnvironments("a", "b").setDefaults("a").make();
+    new EnvironmentGroupMaker("buildenv/bar").setEnvironments("c", "d").setDefaults("c").make();
+    String ruleDef = getDependencyRule(
+        constrainedTo("//buildenv/foo:b"), compatibleWith("//buildenv/bar:d"));
     assertThat(supportedEnvironments("dep", ruleDef))
-        .containsExactlyElementsIn(asLabelSet("//foo_env:b", "//bar_env:c", "//bar_env:d"));
+        .containsExactlyElementsIn(
+            asLabelSet("//buildenv/foo:b", "//buildenv/bar:c", "//buildenv/bar:d"));
   }
 
   /**
    * The same label can't appear in both a constraint and a compatibility declaration.
    */
+  @Test
   public void testSameEnvironmentCompatibleAndRestricted() throws Exception {
-    new EnvironmentGroupMaker("foo_env").setEnvironments("a", "b").setDefaults("a").make();
+    new EnvironmentGroupMaker("buildenv/foo").setEnvironments("a", "b").setDefaults("a").make();
     reporter.removeHandler(failFastHandler);
-    String ruleDef = getDependencyRule(constrainedTo("//foo_env:b"), compatibleWith("//foo_env:b"));
+    String ruleDef = getDependencyRule(
+        constrainedTo("//buildenv/foo:b"), compatibleWith("//buildenv/foo:b"));
     assertNull(scratchConfiguredTarget("hello", "dep", ruleDef));
-    assertContainsEvent("//foo_env:b cannot appear both here and in restricted_to");
+    assertContainsEvent("//buildenv/foo:b cannot appear both here and in restricted_to");
   }
 
   /**
    * Two labels from the same group can't appear in different attributes.
    */
+  @Test
   public void testSameGroupCompatibleAndRestricted() throws Exception {
-    new EnvironmentGroupMaker("foo_env").setEnvironments("a", "b").setDefaults("a").make();
+    new EnvironmentGroupMaker("buildenv/foo").setEnvironments("a", "b").setDefaults("a").make();
     reporter.removeHandler(failFastHandler);
-    String ruleDef = getDependencyRule(constrainedTo("//foo_env:a"), compatibleWith("//foo_env:b"));
+    String ruleDef = getDependencyRule(
+        constrainedTo("//buildenv/foo:a"), compatibleWith("//buildenv/foo:b"));
     assertNull(scratchConfiguredTarget("hello", "dep", ruleDef));
-    assertContainsEvent("//foo_env:b and //foo_env:a belong to the same environment group");
+    assertContainsEvent(
+        "//buildenv/foo:b and //buildenv/foo:a belong to the same environment group");
   }
 
   /**
    * Tests that rule class defaults change a rule's default set of environments.
    */
+  @Test
   public void testSupportedEnvironmentsRuleClassDefaults() throws Exception {
     writeRuleClassDefaultEnvironments();
     String ruleDef = "rule_class_default(name = 'a')";
-    Set<Label> expectedEnvironments =
-        asLabelSet("//rule_class_compat:a", "//rule_class_compat:b", "//rule_class_restrict:d");
+    Set<Label> expectedEnvironments = asLabelSet("//buildenv/rule_class_compat:a",
+        "//buildenv/rule_class_compat:b", "//buildenv/rule_class_restrict:d");
     assertThat(supportedEnvironments("a", ruleDef)).containsExactlyElementsIn(expectedEnvironments);
   }
 
   /**
    * Tests that explicit declarations override rule class defaults.
    */
+  @Test
   public void testExplicitAttributesOverrideRuleClassDefaults() throws Exception {
     writeRuleClassDefaultEnvironments();
     String ruleDef = "rule_class_default("
         + "    name = 'a',"
-        + "    compatible_with = ['//rule_class_restrict:c'],"
-        + "    restricted_to = ['//rule_class_compat:a'],"
+        + "    compatible_with = ['//buildenv/rule_class_restrict:c'],"
+        + "    restricted_to = ['//buildenv/rule_class_compat:a'],"
         + ")";
-    Set<Label> expectedEnvironments =
-        asLabelSet("//rule_class_compat:a", "//rule_class_restrict:c", "//rule_class_restrict:d");
+    Set<Label> expectedEnvironments = asLabelSet("//buildenv/rule_class_compat:a",
+        "//buildenv/rule_class_restrict:c", "//buildenv/rule_class_restrict:d");
     assertThat(supportedEnvironments("a", ruleDef)).containsExactlyElementsIn(expectedEnvironments);
   }
 
@@ -275,15 +320,17 @@ public class ConstraintsTest extends AbstractConstraintsTest {
    * Tests that a rule's "known" supported environments includes those from groups referenced
    * in rule class defaults but not in explicit rule attributes.
    */
+  @Test
   public void testKnownEnvironmentsIncludesThoseFromRuleClassDefaults() throws Exception {
     writeRuleClassDefaultEnvironments();
-    new EnvironmentGroupMaker("foo_env").setEnvironments("a", "b").setDefaults("a").make();
+    new EnvironmentGroupMaker("buildenv/foo").setEnvironments("a", "b").setDefaults("a").make();
     String ruleDef = "rule_class_default("
         + "    name = 'a',"
-        + "    restricted_to = ['//foo_env:b'],"
+        + "    restricted_to = ['//buildenv/foo:b'],"
         + ")";
-    Set<Label> expectedEnvironments = asLabelSet("//rule_class_compat:a", "//rule_class_compat:b",
-        "//rule_class_restrict:d", "//foo_env:b");
+    Set<Label> expectedEnvironments = asLabelSet("//buildenv/rule_class_compat:a",
+        "//buildenv/rule_class_compat:b", "//buildenv/rule_class_restrict:d",
+        "//buildenv/foo:b");
     assertThat(supportedEnvironments("a", ruleDef)).containsExactlyElementsIn(expectedEnvironments);
   }
 
@@ -291,20 +338,22 @@ public class ConstraintsTest extends AbstractConstraintsTest {
    * Tests that environments from the same group can't appear in both restriction and
    * compatibility rule class defaults.
    */
+  @Test
   public void testSameEnvironmentRuleClassCompatibleAndRestricted() throws Exception {
     writeRuleClassDefaultEnvironments();
     reporter.removeHandler(failFastHandler);
     String ruleDef = "bad_rule_class_default(name = 'a')";
     assertNull(scratchConfiguredTarget("hello", "a", ruleDef));
-    assertContainsEvent(
-        "//rule_class_compat:a and //rule_class_compat:b belong to the same environment group");
+    assertContainsEvent("//buildenv/rule_class_compat:a and //buildenv/rule_class_compat:b "
+        + "belong to the same environment group");
   }
 
   /**
    * Tests that a dependency is valid if both rules implicitly inherit all default environments.
    */
+  @Test
   public void testAllDefaults() throws Exception {
-    new EnvironmentGroupMaker("foo_env").setEnvironments("a", "b").setDefaults("a").make();
+    new EnvironmentGroupMaker("buildenv/foo").setEnvironments("a", "b").setDefaults("a").make();
     scratch.file("hello/BUILD",
         getDependencyRule(),
         getDependingRule());
@@ -315,11 +364,12 @@ public class ConstraintsTest extends AbstractConstraintsTest {
   /**
    * Tests that a dependency is valid when both rules explicitly declare the same constraints.
    */
+  @Test
   public void testSameConstraintsDeclaredExplicitly() throws Exception {
-    new EnvironmentGroupMaker("foo_env").setEnvironments("a", "b").setDefaults("a").make();
+    new EnvironmentGroupMaker("buildenv/foo").setEnvironments("a", "b").setDefaults("a").make();
     scratch.file("hello/BUILD",
-        getDependencyRule(constrainedTo("//foo_env:b")),
-        getDependingRule(constrainedTo("//foo_env:b")));
+        getDependencyRule(constrainedTo("//buildenv/foo:b")),
+        getDependingRule(constrainedTo("//buildenv/foo:b")));
     assertNotNull(getConfiguredTarget("//hello:main"));
     assertNoEvents();
   }
@@ -328,11 +378,12 @@ public class ConstraintsTest extends AbstractConstraintsTest {
    * Tests that a dependency is valid when both the depender and dependency explicitly declare
    * their constraints and the depender supports a subset of the dependency's environments
    */
+  @Test
   public void testValidConstraintsDeclaredExplicitly() throws Exception {
-    new EnvironmentGroupMaker("foo_env").setEnvironments("a", "b").setDefaults("a").make();
+    new EnvironmentGroupMaker("buildenv/foo").setEnvironments("a", "b").setDefaults("a").make();
     scratch.file("hello/BUILD",
-        getDependencyRule(constrainedTo("//foo_env:a", "//foo_env:b")),
-        getDependingRule(constrainedTo("//foo_env:b")));
+        getDependencyRule(constrainedTo("//buildenv/foo:a", "//buildenv/foo:b")),
+        getDependingRule(constrainedTo("//buildenv/foo:b")));
     assertNotNull(getConfiguredTarget("//hello:main"));
     assertNoEvents();
   }
@@ -341,25 +392,29 @@ public class ConstraintsTest extends AbstractConstraintsTest {
    * Tests that a dependency is invalid when both the depender and dependency explicitly declare
    * their constraints and the depender supports an environment the dependency doesn't.
    */
+  @Test
   public void testInvalidConstraintsDeclaredExplicitly() throws Exception {
-    new EnvironmentGroupMaker("foo_env").setEnvironments("a", "b").setDefaults("a").make();
+    new EnvironmentGroupMaker("buildenv/foo").setEnvironments("a", "b").setDefaults("a").make();
     scratch.file("hello/BUILD",
-        getDependencyRule(constrainedTo("//foo_env:b")),
-        getDependingRule(constrainedTo("//foo_env:a", "//foo_env:b")));
+        getDependencyRule(constrainedTo("//buildenv/foo:b")),
+        getDependingRule(constrainedTo("//buildenv/foo:a", "//buildenv/foo:b")));
     reporter.removeHandler(failFastHandler);
     assertNull(getConfiguredTarget("//hello:main"));
-    assertContainsEvent("dependency //hello:dep doesn't support expected environment: //foo_env:a");
+    assertContainsEvent(
+        "dependency //hello:dep doesn't support expected environment: //buildenv/foo:a");
   }
 
   /**
    * Tests that a dependency is valid when both rules add the same set of environments to their
    * defaults.
    */
+  @Test
   public void testSameCompatibilityConstraints() throws Exception {
-    new EnvironmentGroupMaker("foo_env").setEnvironments("a", "b", "c").setDefaults("a").make();
+    new EnvironmentGroupMaker("buildenv/foo").setEnvironments("a", "b", "c").setDefaults("a")
+        .make();
     scratch.file("hello/BUILD",
-        getDependencyRule(compatibleWith("//foo_env:b", "//foo_env:c")),
-        getDependingRule(compatibleWith("//foo_env:b", "//foo_env:c")));
+        getDependencyRule(compatibleWith("//buildenv/foo:b", "//buildenv/foo:c")),
+        getDependingRule(compatibleWith("//buildenv/foo:b", "//buildenv/foo:c")));
     assertNotNull(getConfiguredTarget("//hello:main"));
     assertNoEvents();
   }
@@ -368,11 +423,13 @@ public class ConstraintsTest extends AbstractConstraintsTest {
    * Tests that a dependency is valid when both rules add environments to their defaults and
    * the depender only adds environments also added by the dependency.
    */
+  @Test
   public void testValidCompatibilityConstraints() throws Exception {
-    new EnvironmentGroupMaker("foo_env").setEnvironments("a", "b", "c").setDefaults("a").make();
+    new EnvironmentGroupMaker("buildenv/foo").setEnvironments("a", "b", "c").setDefaults("a")
+        .make();
     scratch.file("hello/BUILD",
-        getDependencyRule(compatibleWith("//foo_env:b", "//foo_env:c")),
-        getDependingRule(compatibleWith("//foo_env:c")));
+        getDependencyRule(compatibleWith("//buildenv/foo:b", "//buildenv/foo:c")),
+        getDependingRule(compatibleWith("//buildenv/foo:c")));
     assertNotNull(getConfiguredTarget("//hello:main"));
     assertNoEvents();
   }
@@ -381,40 +438,48 @@ public class ConstraintsTest extends AbstractConstraintsTest {
    * Tests that a dependency is invalid when both rules add environments to their defaults and
    * the depender adds environments not added by the dependency.
    */
+  @Test
   public void testInvalidCompatibilityConstraints() throws Exception {
-    new EnvironmentGroupMaker("foo_env").setEnvironments("a", "b", "c").setDefaults("a").make();
+    new EnvironmentGroupMaker("buildenv/foo").setEnvironments("a", "b", "c").setDefaults("a")
+        .make();
     scratch.file("hello/BUILD",
-        getDependencyRule(compatibleWith("//foo_env:c")),
-        getDependingRule(compatibleWith("//foo_env:b", "//foo_env:c")));
+        getDependencyRule(compatibleWith("//buildenv/foo:c")),
+        getDependingRule(compatibleWith("//buildenv/foo:b", "//buildenv/foo:c")));
     reporter.removeHandler(failFastHandler);
     assertNull(getConfiguredTarget("//hello:main"));
-    assertContainsEvent("dependency //hello:dep doesn't support expected environment: //foo_env:b");
+    assertContainsEvent(
+        "dependency //hello:dep doesn't support expected environment: //buildenv/foo:b");
   }
 
   /**
    * Tests the error message when the dependency is missing multiple expected environments.
    */
+  @Test
   public void testMultipleMissingEnvironments() throws Exception {
-    new EnvironmentGroupMaker("foo_env").setEnvironments("a", "b", "c").setDefaults("a").make();
+    new EnvironmentGroupMaker("buildenv/foo").setEnvironments("a", "b", "c").setDefaults("a")
+        .make();
     scratch.file("hello/BUILD",
         getDependencyRule(),
-        getDependingRule(compatibleWith("//foo_env:b", "//foo_env:c")));
+        getDependingRule(compatibleWith("//buildenv/foo:b", "//buildenv/foo:c")));
     reporter.removeHandler(failFastHandler);
     assertNull(getConfiguredTarget("//hello:main"));
-    assertContainsEvent(
-        "dependency //hello:dep doesn't support expected environments: //foo_env:b, //foo_env:c");
+    assertContainsEvent("dependency //hello:dep doesn't support expected environments: "
+        + "//buildenv/foo:b, //buildenv/foo:c");
   }
 
   /**
    * Tests a valid dependency including environments from different groups.
    */
+  @Test
   public void testValidMultigroupConstraints() throws Exception {
-    new EnvironmentGroupMaker("foo_env").setEnvironments("a", "b", "c").setDefaults("a").make();
-    new EnvironmentGroupMaker("bar_env").setEnvironments("d", "e", "f").setDefaults("d").make();
+    new EnvironmentGroupMaker("buildenv/foo").setEnvironments("a", "b", "c").setDefaults("a")
+        .make();
+    new EnvironmentGroupMaker("buildenv/bar").setEnvironments("d", "e", "f").setDefaults("d")
+        .make();
     scratch.file("hello/BUILD",
-        getDependencyRule(constrainedTo("//foo_env:b", "//foo_env:c"),
-            compatibleWith("//bar_env:e")),
-        getDependingRule(constrainedTo("//foo_env:c"), compatibleWith("//bar_env:e")));
+        getDependencyRule(constrainedTo("//buildenv/foo:b", "//buildenv/foo:c"),
+            compatibleWith("//buildenv/bar:e")),
+        getDependingRule(constrainedTo("//buildenv/foo:c"), compatibleWith("//buildenv/bar:e")));
     assertNotNull(getConfiguredTarget("//hello:main"));
     assertNoEvents();
   }
@@ -422,28 +487,33 @@ public class ConstraintsTest extends AbstractConstraintsTest {
   /**
    * Tests an invalid dependency including environments from different groups.
    */
+  @Test
   public void testInvalidMultigroupConstraints() throws Exception {
-    new EnvironmentGroupMaker("foo_env").setEnvironments("a", "b", "c").setDefaults("a").make();
-    new EnvironmentGroupMaker("bar_env").setEnvironments("d", "e", "f").setDefaults("d").make();
+    new EnvironmentGroupMaker("buildenv/foo").setEnvironments("a", "b", "c").setDefaults("a")
+        .make();
+    new EnvironmentGroupMaker("buildenv/bar").setEnvironments("d", "e", "f").setDefaults("d")
+        .make();
     scratch.file("hello/BUILD",
-        getDependencyRule(constrainedTo("//foo_env:c"), compatibleWith("//bar_env:e")),
-        getDependingRule(constrainedTo("//foo_env:b", "//foo_env:c"),
-            compatibleWith("//bar_env:e")));
+        getDependencyRule(constrainedTo("//buildenv/foo:c"), compatibleWith("//buildenv/bar:e")),
+        getDependingRule(constrainedTo("//buildenv/foo:b", "//buildenv/foo:c"),
+            compatibleWith("//buildenv/bar:e")));
     reporter.removeHandler(failFastHandler);
     assertNull(getConfiguredTarget("//hello:main"));
-    assertContainsEvent("dependency //hello:dep doesn't support expected environment: //foo_env:b");
+    assertContainsEvent(
+        "dependency //hello:dep doesn't support expected environment: //buildenv/foo:b");
   }
 
   /**
    * Tests a valid dependency where the dependency doesn't "know" about the expected environment's
    * group, but implicitly supports it because that environment is a default.
    */
+  @Test
   public void testValidConstraintsUnknownEnvironmentToDependency() throws Exception {
-    new EnvironmentGroupMaker("foo_env").setEnvironments("a", "b", "c").setDefaults("a", "b")
+    new EnvironmentGroupMaker("buildenv/foo").setEnvironments("a", "b", "c").setDefaults("a", "b")
         .make();
     scratch.file("hello/BUILD",
         getDependencyRule(),
-        getDependingRule(constrainedTo("//foo_env:b")));
+        getDependingRule(constrainedTo("//buildenv/foo:b")));
     assertNotNull(getConfiguredTarget("//hello:main"));
     assertNoEvents();
   }
@@ -452,15 +522,17 @@ public class ConstraintsTest extends AbstractConstraintsTest {
    * Tests an invalid dependency where the dependency doesn't "know" about the expected
    * environment's group and doesn't support it because it isn't a default.
    */
+  @Test
   public void testInvalidConstraintsUnknownEnvironmentToDependency() throws Exception {
-    new EnvironmentGroupMaker("foo_env").setEnvironments("a", "b", "c").setDefaults("a", "b")
+    new EnvironmentGroupMaker("buildenv/foo").setEnvironments("a", "b", "c").setDefaults("a", "b")
         .make();
     scratch.file("hello/BUILD",
         getDependencyRule(),
-        getDependingRule(constrainedTo("//foo_env:c")));
+        getDependingRule(constrainedTo("//buildenv/foo:c")));
     reporter.removeHandler(failFastHandler);
     assertNull(getConfiguredTarget("//hello:main"));
-    assertContainsEvent("dependency //hello:dep doesn't support expected environment: //foo_env:c");
+    assertContainsEvent(
+        "dependency //hello:dep doesn't support expected environment: //buildenv/foo:c");
   }
 
   /**
@@ -468,10 +540,12 @@ public class ConstraintsTest extends AbstractConstraintsTest {
    * groups, the depender implicitly supports that group's defaults, and all of those defaults
    * are accounted for in the dependency.
    */
+  @Test
   public void testValidConstraintsUnknownEnvironmentToDependender() throws Exception {
-    new EnvironmentGroupMaker("foo_env").setEnvironments("a", "b", "c").setDefaults("a").make();
+    new EnvironmentGroupMaker("buildenv/foo").setEnvironments("a", "b", "c").setDefaults("a")
+        .make();
     scratch.file("hello/BUILD",
-        getDependencyRule(constrainedTo("//foo_env:a", "//foo_env:b")),
+        getDependencyRule(constrainedTo("//buildenv/foo:a", "//buildenv/foo:b")),
         getDependingRule());
     assertNotNull(getConfiguredTarget("//hello:main"));
     assertNoEvents();
@@ -482,39 +556,45 @@ public class ConstraintsTest extends AbstractConstraintsTest {
    * groups, the depender implicitly supports that group's defaults, and one of those defaults
    * isn't accounted for in the dependency.
    */
+  @Test
   public void testInvalidConstraintsUnknownEnvironmentToDependender() throws Exception {
-    new EnvironmentGroupMaker("foo_env").setEnvironments("a", "b", "c").setDefaults("a").make();
+    new EnvironmentGroupMaker("buildenv/foo").setEnvironments("a", "b", "c").setDefaults("a")
+        .make();
     scratch.file("hello/BUILD",
-        getDependencyRule(constrainedTo("//foo_env:b")),
+        getDependencyRule(constrainedTo("//buildenv/foo:b")),
         getDependingRule());
     reporter.removeHandler(failFastHandler);
     assertNull(getConfiguredTarget("//hello:main"));
-    assertContainsEvent("dependency //hello:dep doesn't support expected environment: //foo_env:a");
+    assertContainsEvent(
+        "dependency //hello:dep doesn't support expected environment: //buildenv/foo:a");
   }
 
   /**
    * Tests the case where one dependency is valid and another one isn't.
    */
+  @Test
   public void testOneDependencyIsInvalid() throws Exception {
-    new EnvironmentGroupMaker("foo_env").setEnvironments("a", "b").setDefaults("a").make();
+    new EnvironmentGroupMaker("buildenv/foo").setEnvironments("a", "b").setDefaults("a").make();
     scratch.file("hello/BUILD",
-        getRuleDef("sh_library", "bad_dep", constrainedTo("//foo_env:b")),
-        getRuleDef("sh_library", "good_dep", compatibleWith("//foo_env:b")),
+        getRuleDef("sh_library", "bad_dep", constrainedTo("//buildenv/foo:b")),
+        getRuleDef("sh_library", "good_dep", compatibleWith("//buildenv/foo:b")),
         getRuleDef("sh_library", "depender",
-            constrainedTo("//foo_env:a", "//foo_env:b"),
+            constrainedTo("//buildenv/foo:a", "//buildenv/foo:b"),
             getAttrDef("deps", "good_dep", "bad_dep")));
     reporter.removeHandler(failFastHandler);
     assertNull(getConfiguredTarget("//hello:depender"));
-    assertContainsEvent("//hello:bad_dep doesn't support expected environment: //foo_env:a");
+    assertContainsEvent("//hello:bad_dep doesn't support expected environment: //buildenv/foo:a");
     assertDoesNotContainEvent("//hello:good_dep");
   }
 
+  @Test
   public void testConstraintEnforcementDisabled() throws Exception {
     useConfiguration("--experimental_enforce_constraints=0");
-    new EnvironmentGroupMaker("foo_env").setEnvironments("a", "b", "c").setDefaults("a").make();
+    new EnvironmentGroupMaker("buildenv/foo").setEnvironments("a", "b", "c").setDefaults("a")
+        .make();
     scratch.file("hello/BUILD",
         getDependencyRule(),
-        getDependingRule(compatibleWith("//foo_env:b", "//foo_env:c")));
+        getDependingRule(compatibleWith("//buildenv/foo:b", "//buildenv/foo:c")));
     assertNotNull(getConfiguredTarget("//hello:main"));
     assertNoEvents();
   }
@@ -523,12 +603,13 @@ public class ConstraintsTest extends AbstractConstraintsTest {
    * Tests that package defaults compatibility produces a valid dependency that would otherwise
    * be invalid.
    */
+  @Test
   public void testCompatibilityPackageDefaults() throws Exception {
-    new EnvironmentGroupMaker("foo_env").setEnvironments("a", "b").setDefaults("a").make();
+    new EnvironmentGroupMaker("buildenv/foo").setEnvironments("a", "b").setDefaults("a").make();
     scratch.file("hello/BUILD",
-        "package(default_compatible_with = ['//foo_env:b'])",
+        "package(default_compatible_with = ['//buildenv/foo:b'])",
         getDependencyRule(),
-        getDependingRule(compatibleWith("//foo_env:b")));
+        getDependingRule(compatibleWith("//buildenv/foo:b")));
     assertNotNull(getConfiguredTarget("//hello:main"));
     assertNoEvents();
   }
@@ -536,29 +617,33 @@ public class ConstraintsTest extends AbstractConstraintsTest {
   /**
    * Tests that a rule's compatibility declaration overrides its package defaults compatibility.
    */
+  @Test
   public void testPackageDefaultsCompatibilityOverride() throws Exception {
-    new EnvironmentGroupMaker("foo_env").setEnvironments("a", "b").setDefaults().make();
+    new EnvironmentGroupMaker("buildenv/foo").setEnvironments("a", "b").setDefaults().make();
     // We intentionally create an invalid dependency structure vs. a valid one. If we tested on
     // a valid one, this test wouldn't be able to distinguish between rule declarations overriding
     // package defaults and package defaults overriding rule declarations.
     scratch.file("hello/BUILD",
-        "package(default_compatible_with = ['//foo_env:b'])",
-        getDependencyRule(compatibleWith("//foo_env:a")),
-        getDependingRule(compatibleWith("//foo_env:a", "//foo_env:b")));
+        "package(default_compatible_with = ['//buildenv/foo:b'])",
+        getDependencyRule(compatibleWith("//buildenv/foo:a")),
+        getDependingRule(compatibleWith("//buildenv/foo:a", "//buildenv/foo:b")));
     reporter.removeHandler(failFastHandler);
     assertNull(getConfiguredTarget("//hello:main"));
-    assertContainsEvent("dependency //hello:dep doesn't support expected environment: //foo_env:b");
+    assertContainsEvent(
+        "dependency //hello:dep doesn't support expected environment: //buildenv/foo:b");
   }
 
   /**
    * Tests that package defaults restriction produces an valid dependency that would otherwise
    * be invalid.
    */
+  @Test
   public void testRestrictionPackageDefaults() throws Exception {
-    new EnvironmentGroupMaker("foo_env").setEnvironments("a", "b").setDefaults("a", "b").make();
+    new EnvironmentGroupMaker("buildenv/foo").setEnvironments("a", "b").setDefaults("a", "b")
+        .make();
     scratch.file("hello/BUILD",
-        "package(default_restricted_to = ['//foo_env:b'])",
-        getDependencyRule(constrainedTo("//foo_env:b")),
+        "package(default_restricted_to = ['//buildenv/foo:b'])",
+        getDependencyRule(constrainedTo("//buildenv/foo:b")),
         getDependingRule());
     assertNotNull(getConfiguredTarget("//hello:main"));
     assertNoEvents();
@@ -567,18 +652,20 @@ public class ConstraintsTest extends AbstractConstraintsTest {
   /**
    * Tests that a rule's restriction declaration overrides its package defaults restriction.
    */
+  @Test
   public void testPackageDefaultsRestrictionOverride() throws Exception {
-    new EnvironmentGroupMaker("foo_env").setEnvironments("a", "b").setDefaults().make();
+    new EnvironmentGroupMaker("buildenv/foo").setEnvironments("a", "b").setDefaults().make();
     // We intentionally create an invalid dependency structure vs. a valid one. If we tested on
     // a valid one, this test wouldn't be able to distinguish between rule declarations overriding
     // package defaults and package defaults overriding rule declarations.
     scratch.file("hello/BUILD",
-        "package(default_restricted_to = ['//foo_env:b'])",
-        getDependencyRule(constrainedTo("//foo_env:a")),
-        getDependingRule(constrainedTo("//foo_env:a", "//foo_env:b")));
+        "package(default_restricted_to = ['//buildenv/foo:b'])",
+        getDependencyRule(constrainedTo("//buildenv/foo:a")),
+        getDependingRule(constrainedTo("//buildenv/foo:a", "//buildenv/foo:b")));
     reporter.removeHandler(failFastHandler);
     assertNull(getConfiguredTarget("//hello:main"));
-    assertContainsEvent("dependency //hello:dep doesn't support expected environment: //foo_env:b");
+    assertContainsEvent(
+        "dependency //hello:dep doesn't support expected environment: //buildenv/foo:b");
   }
 
   /**
@@ -587,52 +674,62 @@ public class ConstraintsTest extends AbstractConstraintsTest {
    * where the "compatible_with" / "restricted_to" values of rule class defaults are merged together
    * before being supplied to the rule. See comments in DependencyResolver for more discussion.
    */
+  @Test
   public void testPackageDefaultsDirectlyFillRuleAttributes() throws Exception {
-    new EnvironmentGroupMaker("foo_env").setEnvironments("a", "b").setDefaults().make();
+    new EnvironmentGroupMaker("buildenv/foo").setEnvironments("a", "b").setDefaults().make();
     scratch.file("hello/BUILD",
-        "package(default_restricted_to = ['//foo_env:b'])",
-        getDependencyRule(compatibleWith("//foo_env:a")));
+        "package(default_restricted_to = ['//buildenv/foo:b'])",
+        getDependencyRule(compatibleWith("//buildenv/foo:a")));
     reporter.removeHandler(failFastHandler);
     assertNull(getConfiguredTarget("//hello:dep"));
-    assertContainsEvent("//foo_env:a and //foo_env:b belong to the same environment group. They "
-        + "should be declared together either here or in restricted_to");
+    assertContainsEvent("//buildenv/foo:a and //buildenv/foo:b belong to the same "
+        + "environment group. They should be declared together either here or in restricted_to");
   }
 
+  @Test
   public void testHostDependenciesAreNotChecked() throws Exception {
-    new EnvironmentGroupMaker("foo_env").setEnvironments("a", "b").setDefaults("a").make();
+    new EnvironmentGroupMaker("buildenv/foo").setEnvironments("a", "b").setDefaults("a").make();
     scratch.file("hello/BUILD",
-        "sh_binary(name = 'host_tool', srcs = ['host_tool.sh'], restricted_to = ['//foo_env:b'])",
+        "sh_binary(name = 'host_tool',",
+        "    srcs = ['host_tool.sh'],",
+        "    restricted_to = ['//buildenv/foo:b'])",
         "genrule(",
         "    name = 'hello',",
         "    srcs = [],",
         "    outs = ['hello.out'],",
         "    cmd = '',",
         "    tools = [':host_tool'],",
-        "    compatible_with = ['//foo_env:a'])");
+        "    compatible_with = ['//buildenv/foo:a'])");
     assertNotNull(getConfiguredTarget("//hello:hello"));
     assertNoEvents();
   }
 
+  @Test
   public void testHostDependenciesNotCheckedNoDistinctHostConfiguration() throws Exception {
     useConfiguration("--nodistinct_host_configuration");
-    new EnvironmentGroupMaker("foo_env").setEnvironments("a", "b").setDefaults("a").make();
+    new EnvironmentGroupMaker("buildenv/foo").setEnvironments("a", "b").setDefaults("a").make();
     scratch.file("hello/BUILD",
-        "sh_binary(name = 'host_tool', srcs = ['host_tool.sh'], restricted_to = ['//foo_env:b'])",
+        "sh_binary(name = 'host_tool',",
+        "    srcs = ['host_tool.sh'],",
+        "    restricted_to = ['//buildenv/foo:b'])",
         "genrule(",
         "    name = 'hello',",
         "    srcs = [],",
         "    outs = ['hello.out'],",
         "    cmd = '',",
         "    tools = [':host_tool'],",
-        "    compatible_with = ['//foo_env:a'])");
+        "    compatible_with = ['//buildenv/foo:a'])");
     assertNotNull(getConfiguredTarget("//hello:hello"));
     assertNoEvents();
   }
 
+  @Test
   public void testImplicitAndLateBoundDependenciesAreNotChecked() throws Exception {
-    new EnvironmentGroupMaker("foo_env").setEnvironments("a", "b").setDefaults("a").make();
+    new EnvironmentGroupMaker("buildenv/foo").setEnvironments("a", "b").setDefaults("a").make();
     scratch.file("hello/BUILD",
-        "rule_with_implicit_and_latebound_deps(name = 'hi', compatible_with = ['//foo_env:b'])");
+        "rule_with_implicit_and_latebound_deps(",
+        "    name = 'hi',",
+        "    compatible_with = ['//buildenv/foo:b'])");
     assertNotNull(getConfiguredTarget("//hello:hi"));
     // Note that the event "cannot build rule_with_implicit_and_latebound_deps" *does* occur
     // because of the implementation of UnknownRuleConfiguredTarget.
@@ -641,22 +738,38 @@ public class ConstraintsTest extends AbstractConstraintsTest {
     assertDoesNotContainEvent("normal doesn't support expected environment");
   }
 
+  @Test
+  public void testImplicitDepsWithWhiteListedAttributeAreChecked() throws Exception {
+    new EnvironmentGroupMaker("buildenv/foo").setEnvironments("a", "b").setDefaults("a").make();
+    scratch.file("hello/BUILD",
+        "rule_with_enforced_implicit_deps(",
+        "    name = 'hi',",
+        "    compatible_with = ['//buildenv/foo:b'])");
+    reporter.removeHandler(failFastHandler);
+    assertNull(getConfiguredTarget("//hello:hi"));
+    assertContainsEvent(
+        "dependency //helpers:implicit doesn't support expected environment: //buildenv/foo:b");
+  }
+
+  @Test
   public void testOutputFilesAreChecked() throws Exception {
-    new EnvironmentGroupMaker("foo_env").setEnvironments("a", "b").setDefaults().make();
+    new EnvironmentGroupMaker("buildenv/foo").setEnvironments("a", "b").setDefaults().make();
     scratch.file("hello/BUILD",
         "genrule(name = 'gen', srcs = [], outs = ['shlib.sh'], cmd = '')",
         "sh_library(",
         "    name = 'shlib',",
         "    srcs = ['shlib.sh'],",
         "    data = ['whatever.txt'],",
-        "    compatible_with = ['//foo_env:a'])");
+        "    compatible_with = ['//buildenv/foo:a'])");
     reporter.removeHandler(failFastHandler);
     assertNull(getConfiguredTarget("//hello:shlib"));
-    assertContainsEvent("dependency //hello:gen doesn't support expected environment: //foo_env:a");
+    assertContainsEvent(
+        "dependency //hello:gen doesn't support expected environment: //buildenv/foo:a");
   }
 
+  @Test
   public void testConfigSettingRulesAreNotChecked() throws Exception {
-    new EnvironmentGroupMaker("foo_env").setEnvironments("a", "b").setDefaults().make();
+    new EnvironmentGroupMaker("buildenv/foo").setEnvironments("a", "b").setDefaults().make();
     scratch.file("hello/BUILD",
         "config_setting(name = 'setting', values = {'compilation_mode': 'fastbuild'})",
         "sh_library(",
@@ -664,67 +777,73 @@ public class ConstraintsTest extends AbstractConstraintsTest {
         "    srcs = select({",
         "        ':setting': ['shlib.sh'],",
         "    }),",
-        "    compatible_with = ['//foo_env:a'])");
+        "    compatible_with = ['//buildenv/foo:a'])");
     assertNotNull(getConfiguredTarget("//hello:shlib"));
     assertNoEvents();
   }
 
+  @Test
   public void testFulfills() throws Exception {
-    new EnvironmentGroupMaker("foo_env")
+    new EnvironmentGroupMaker("buildenv/foo")
         .setEnvironments("a", "b")
         .setFulfills("a", "b")
         .setDefaults()
         .make();
     scratch.file("hello/BUILD",
-        getDependencyRule(constrainedTo("//foo_env:a")),
-        getDependingRule(constrainedTo("//foo_env:b")));
+        getDependencyRule(constrainedTo("//buildenv/foo:a")),
+        getDependingRule(constrainedTo("//buildenv/foo:b")));
     assertNotNull(getConfiguredTarget("//hello:main"));
     assertNoEvents();
   }
 
+  @Test
   public void testFulfillsIsNotSymmetric() throws Exception {
-    new EnvironmentGroupMaker("foo_env")
+    new EnvironmentGroupMaker("buildenv/foo")
         .setEnvironments("a", "b")
         .setFulfills("a", "b")
         .setDefaults()
         .make();
     scratch.file("hello/BUILD",
-        getDependencyRule(constrainedTo("//foo_env:b")),
-        getDependingRule(constrainedTo("//foo_env:a")));
+        getDependencyRule(constrainedTo("//buildenv/foo:b")),
+        getDependingRule(constrainedTo("//buildenv/foo:a")));
     reporter.removeHandler(failFastHandler);
     assertNull(getConfiguredTarget("//hello:main"));
-    assertContainsEvent("dependency //hello:dep doesn't support expected environment: //foo_env:a");
+    assertContainsEvent(
+        "dependency //hello:dep doesn't support expected environment: //buildenv/foo:a");
   }
 
+  @Test
   public void testFulfillsIsTransitive() throws Exception {
-    new EnvironmentGroupMaker("foo_env")
+    new EnvironmentGroupMaker("buildenv/foo")
         .setEnvironments("a", "b", "c")
         .setFulfills("a", "b")
         .setFulfills("b", "c")
         .setDefaults()
         .make();
     scratch.file("hello/BUILD",
-        getDependencyRule(constrainedTo("//foo_env:a")),
-        getDependingRule(constrainedTo("//foo_env:c")));
+        getDependencyRule(constrainedTo("//buildenv/foo:a")),
+        getDependingRule(constrainedTo("//buildenv/foo:c")));
     assertNotNull(getConfiguredTarget("//hello:main"));
     assertNoEvents();
   }
 
+  @Test
   public void testDefaultEnvironmentDirectlyFulfills() throws Exception {
-    new EnvironmentGroupMaker("foo_env")
+    new EnvironmentGroupMaker("buildenv/foo")
         .setEnvironments("a", "b")
         .setFulfills("a", "b")
         .setDefaults("a")
         .make();
     scratch.file("hello/BUILD",
         getDependencyRule(),
-        getDependingRule(constrainedTo("//foo_env:b")));
+        getDependingRule(constrainedTo("//buildenv/foo:b")));
     assertNotNull(getConfiguredTarget("//hello:main"));
     assertNoEvents();
   }
 
+  @Test
   public void testDefaultEnvironmentIndirectlyFulfills() throws Exception {
-    new EnvironmentGroupMaker("foo_env")
+    new EnvironmentGroupMaker("buildenv/foo")
         .setEnvironments("a", "b", "c")
         .setFulfills("a", "b")
         .setFulfills("b", "c")
@@ -732,37 +851,48 @@ public class ConstraintsTest extends AbstractConstraintsTest {
         .make();
     scratch.file("hello/BUILD",
         getDependencyRule(),
-        getDependingRule(constrainedTo("//foo_env:c")));
+        getDependingRule(constrainedTo("//buildenv/foo:c")));
     assertNotNull(getConfiguredTarget("//hello:main"));
     assertNoEvents();
   }
 
+  @Test
   public void testEnvironmentFulfillsExpectedDefault() throws Exception {
-    new EnvironmentGroupMaker("foo_env")
+    new EnvironmentGroupMaker("buildenv/foo")
         .setEnvironments("a", "b")
         .setFulfills("a", "b")
         .setDefaults("b")
         .make();
     scratch.file("hello/BUILD",
-        getDependencyRule(constrainedTo("//foo_env:a")),
+        getDependencyRule(constrainedTo("//buildenv/foo:a")),
         getDependingRule());
     assertNotNull(getConfiguredTarget("//hello:main"));
     assertNoEvents();
   }
 
+  @Test
   public void testConstraintExemptRulesDontHaveConstraintAttributes() throws Exception {
-    new EnvironmentGroupMaker("foo_env")
+    new EnvironmentGroupMaker("buildenv/foo")
         .setEnvironments("a", "b")
         .setDefaults("a")
         .make();
     scratch.file("ihave/BUILD",
         "totally_free_rule(",
         "    name = 'nolimits',",
-        "    restricted_to = ['//foo_env:b']",
+        "    restricted_to = ['//buildenv/foo:b']",
         ")");
 
     reporter.removeHandler(failFastHandler);
     assertNull(getConfiguredTarget("//ihave:nolimits"));
     assertContainsEvent("no such attribute 'restricted_to' in 'totally_free_rule'");
+  }
+
+  @Test
+  public void testBuildingEnvironmentGroupDirectlyDoesntCrash() throws Exception {
+    new EnvironmentGroupMaker("buildenv/foo")
+        .setEnvironments("a", "b")
+        .setDefaults("a")
+        .make();
+    assertNotNull(getConfiguredTarget("//buildenv/foo:foo"));
   }
 }

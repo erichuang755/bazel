@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Copyright 2015 Google Inc. All rights reserved.
+# Copyright 2015 The Bazel Authors. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -205,7 +205,108 @@ EOF
   bazel test --test_timeout=2 //dir:test &> $TEST_log && fail "should have timed out"
   expect_log "TIMEOUT"
   bazel test --test_timeout=4 //dir:test || fail "expected success"
+}
 
+# Makes sure that runs_per_test_detects_flakes detects FLAKY if any of the 5
+# attempts passes (which should cover all cases of being picky about the
+# first/last/etc ones only being counted).
+# We do this using an un-sandboxed test which keeps track of how many runs there
+# have been using files which are undeclared inputs/outputs.
+function test_runs_per_test_detects_flakes() {
+  # Directory for counters
+  local COUNTER_DIR="${TEST_TMPDIR}/counter_dir"
+  mkdir -p "${COUNTER_DIR}"
+
+  for (( i = 1 ; i <= 5 ; i++ )); do
+
+    # This file holds the number of the next run
+    echo 1 > "${COUNTER_DIR}/$i"
+    cat <<EOF > test$i.sh
+#!/bin/bash
+i=\$(< "${COUNTER_DIR}/$i")
+
+# increment the hidden state
+echo \$((i + 1)) > "${COUNTER_DIR}/$i"
+
+# succeed exactly once.
+exit \$((i != $i))
+}
+EOF
+    chmod +x test$i.sh
+    cat <<EOF > BUILD
+sh_test(name = "test$i", srcs = [ "test$i.sh" ])
+EOF
+    bazel test --spawn_strategy=standalone --jobs=1 \
+        --runs_per_test=5 --runs_per_test_detects_flakes \
+        //:test$i &> $TEST_log || fail "should have succeeded"
+    expect_log "FLAKY"
+  done
+}
+
+# Tests that the test.xml is extracted from the sandbox correctly.
+function test_xml_is_present() {
+  mkdir -p dir
+
+  cat <<'EOF' > dir/test.sh
+#!/bin/sh
+echo HELLO > $XML_OUTPUT_FILE
+exit 0
+EOF
+
+  chmod +x dir/test.sh
+
+  cat <<'EOF' > dir/BUILD
+  sh_test(
+    name = "test",
+    srcs = [ "test.sh" ],
+  )
+EOF
+
+  bazel test -s --test_output=streamed //dir:test &> $TEST_log || fail "expected success"
+
+  xml_log=bazel-testlogs/dir/test/test.xml
+  [ -s $xml_log ] || fail "$xml_log was not present after test"
+}
+
+function test_always_xml_output() {
+  mkdir -p dir
+
+  cat <<EOF > dir/success.sh
+#!/bin/sh
+exit 0
+EOF
+  cat <<EOF > dir/fail.sh
+#!/bin/sh
+exit 1
+EOF
+
+  chmod +x dir/{success,fail}.sh
+
+  cat <<EOF > dir/BUILD
+sh_test(
+    name = "success",
+    srcs = [ "success.sh" ],
+)
+sh_test(
+    name = "fail",
+    srcs = [ "fail.sh" ],
+)
+EOF
+
+  bazel test //dir:all &> $TEST_log && fail "should have failed" || true
+  [ -f "bazel-testlogs/dir/success/test.xml" ] \
+    || fail "No xml file for //dir:success"
+  [ -f "bazel-testlogs/dir/fail/test.xml" ] \
+    || fail "No xml file for //dir:fail"
+
+  cat bazel-testlogs/dir/success/test.xml >$TEST_log
+  expect_log "errors=\"0\""
+  expect_log_once "testcase"
+  expect_log "name=\"dir/success\""
+  cat bazel-testlogs/dir/fail/test.xml >$TEST_log
+  expect_log "errors=\"1\""
+  expect_log_once "testcase"
+  expect_log "name=\"dir/fail\""
 }
 
 run_suite "test tests"

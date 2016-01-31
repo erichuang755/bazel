@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,29 +16,87 @@ package com.google.devtools.build.lib.ideinfo;
 
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.TransitiveInfoProvider;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
+import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
-import com.google.devtools.build.lib.syntax.Label;
 
 /**
  * File provider for Android Studio ide build files.
  */
 @Immutable
 public final class AndroidStudioInfoFilesProvider implements TransitiveInfoProvider {
-  private final NestedSet<Artifact> ideBuildFiles;
-  private final NestedSet<Label> transitiveDependencies;
+  private final NestedSet<Artifact> ideInfoFiles;
+  private final NestedSet<Artifact> ideInfoTextFiles;
+  private final NestedSet<Artifact> ideResolveFiles;
+  private final NestedSet<Label> exportedDeps;
 
-  public AndroidStudioInfoFilesProvider(
-      NestedSet<Artifact> ideBuildFiles, NestedSet<Label> transitiveDependencies) {
-    this.ideBuildFiles = ideBuildFiles;
-    this.transitiveDependencies = transitiveDependencies;
+  /**
+   * Builder class for {@link AndroidStudioInfoFilesProvider}
+   */
+  public static class Builder {
+    private final NestedSetBuilder<Artifact> ideInfoFilesBuilder;
+    private final NestedSetBuilder<Artifact> ideInfoTextFilesBuilder;
+    private final NestedSetBuilder<Artifact> ideResolveFilesBuilder;
+    private NestedSetBuilder<Label> exportedDepsBuilder;
+
+    public Builder() {
+      ideInfoFilesBuilder = NestedSetBuilder.stableOrder();
+      ideInfoTextFilesBuilder = NestedSetBuilder.stableOrder();
+      ideResolveFilesBuilder = NestedSetBuilder.stableOrder();
+      exportedDepsBuilder = NestedSetBuilder.stableOrder();
+    }
+
+    public NestedSetBuilder<Artifact> ideInfoFilesBuilder() {
+      return ideInfoFilesBuilder;
+    }
+
+    public NestedSetBuilder<Artifact> ideInfoTextFilesBuilder() {
+      return ideInfoTextFilesBuilder;
+    }
+
+    public NestedSetBuilder<Artifact> ideResolveFilesBuilder() {
+      return ideResolveFilesBuilder;
+    }
+
+    public NestedSetBuilder<Label> exportedDepsBuilder() {
+      return exportedDepsBuilder;
+    }
+
+    public AndroidStudioInfoFilesProvider build() {
+      return new AndroidStudioInfoFilesProvider(
+          ideInfoFilesBuilder.build(),
+          ideInfoTextFilesBuilder.build(),
+          ideResolveFilesBuilder.build(),
+          exportedDepsBuilder.build()
+      );
+    }
   }
 
-  public NestedSet<Artifact> getIdeBuildFiles() {
-    return ideBuildFiles;
+  private AndroidStudioInfoFilesProvider(
+      NestedSet<Artifact> ideInfoFiles,
+      NestedSet<Artifact> ideInfoTextFiles,
+      NestedSet<Artifact> ideResolveFiles,
+      NestedSet<Label> exportedDeps) {
+    this.ideInfoFiles = ideInfoFiles;
+    this.ideInfoTextFiles = ideInfoTextFiles;
+    this.ideResolveFiles = ideResolveFiles;
+    this.exportedDeps = exportedDeps;
   }
 
-  public NestedSet<Label> getTransitiveDependencies() {
-    return transitiveDependencies;
+  public NestedSet<Artifact> getIdeInfoFiles() {
+    return ideInfoFiles;
+  }
+
+  public NestedSet<Artifact> getIdeInfoTextFiles() {
+    return ideInfoTextFiles;
+  }
+
+  public NestedSet<Artifact> getIdeResolveFiles() {
+    return ideResolveFiles;
+  }
+
+  public NestedSet<Label> getExportedDeps() {
+    return exportedDeps;
   }
 }

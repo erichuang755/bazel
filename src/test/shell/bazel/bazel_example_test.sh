@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Copyright 2015 Google Inc. All rights reserved.
+# Copyright 2015 The Bazel Authors. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -70,6 +70,13 @@ function test_java_test() {
   assert_test_fails "${java_native_tests}:resource-fail"
 }
 
+function test_java_test_with_junitrunner() {
+  # Test with junitrunner.
+  setup_javatest_support
+  local java_native_tests=//examples/java-native/src/test/java/com/example/myproject
+  assert_test_ok "${java_native_tests}:custom_with_test_class"
+}
+
 function test_java_test_with_workspace_name() {
   local java_pkg=examples/java-native/src/main/java/com/example/myproject
   # Use named workspace and test if we can still execute hello-world
@@ -107,7 +114,7 @@ if [ "${PLATFORM}" = "darwin" ]; then
     # prevents us from running iOS tests.
     # TODO(bazel-team): Execute iOStests here when this issue is resolved.
     assert_build_output ./bazel-bin/examples/objc/PrenotCalculator.ipa \
-      //examples/objc:PrenotCalculator
+        --ios_sdk_version=$IOS_SDK_VERSION //examples/objc:PrenotCalculator
   }
 fi
 

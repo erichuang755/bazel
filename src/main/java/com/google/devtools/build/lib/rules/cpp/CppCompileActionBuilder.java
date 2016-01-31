@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,7 +16,6 @@ package com.google.devtools.build.lib.rules.cpp;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Functions;
-import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
 import com.google.common.base.Predicates;
 import com.google.common.collect.ImmutableList;
@@ -29,13 +28,14 @@ import com.google.devtools.build.lib.analysis.AnalysisEnvironment;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainFeatures.FeatureConfiguration;
 import com.google.devtools.build.lib.rules.cpp.CppCompileAction.DotdFile;
 import com.google.devtools.build.lib.rules.cpp.CppCompileAction.IncludeResolver;
-import com.google.devtools.build.lib.syntax.Label;
 import com.google.devtools.build.lib.util.FileType;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
 
@@ -79,6 +79,7 @@ public class CppCompileActionBuilder {
   private CppConfiguration cppConfiguration;
   private ImmutableMap<Artifact, IncludeScannable> lipoScannableMap;
   private RuleContext ruleContext = null;
+  private Boolean shouldScanIncludes;
   // New fields need to be added to the copy constructor.
 
   /**
@@ -167,6 +168,7 @@ public class CppCompileActionBuilder {
     this.usePic = other.usePic;
     this.lipoScannableMap = other.lipoScannableMap;
     this.ruleContext = other.ruleContext;
+    this.shouldScanIncludes = other.shouldScanIncludes;
   }
 
   public PathFragment getTempOutputFile() {
@@ -245,11 +247,14 @@ public class CppCompileActionBuilder {
    * action).
    */
   public CppCompileAction build() {
+    // This must be set either to false or true by CppSemantics, otherwise someone forgot to call
+    // finalizeCompileActionBuilder on this builder.
+    Preconditions.checkNotNull(shouldScanIncludes);
+
     // Configuration can be null in tests.
     NestedSetBuilder<Artifact> realMandatoryInputsBuilder = NestedSetBuilder.compileOrder();
     realMandatoryInputsBuilder.addTransitive(mandatoryInputsBuilder.build());
-    if (tempOutputFile == null && configuration != null
-        && !configuration.getFragment(CppConfiguration.class).shouldScanIncludes()) {
+    if (tempOutputFile == null && !shouldScanIncludes) {
       realMandatoryInputsBuilder.addTransitive(context.getDeclaredIncludeSrcs());
     }
     realMandatoryInputsBuilder.addTransitive(context.getAdditionalInputs());
@@ -260,7 +265,8 @@ public class CppCompileActionBuilder {
     // Copying the collections is needed to make the builder reusable.
     if (fake) {
       return new FakeCppCompileAction(owner, ImmutableList.copyOf(features), featureConfiguration,
-          variables, sourceFile, sourceLabel, realMandatoryInputsBuilder.build(), outputFile,
+          variables, sourceFile, shouldScanIncludes, sourceLabel,
+          realMandatoryInputsBuilder.build(), outputFile,
           tempOutputFile, dotdFile, configuration, cppConfiguration, context, actionContext,
           ImmutableList.copyOf(copts), ImmutableList.copyOf(pluginOpts),
           getNocoptPredicate(nocopts), extraSystemIncludePrefixes, fdoBuildStamp, ruleContext,
@@ -269,8 +275,8 @@ public class CppCompileActionBuilder {
       NestedSet<Artifact> realMandatoryInputs = realMandatoryInputsBuilder.build();
 
       return new CppCompileAction(owner, ImmutableList.copyOf(features), featureConfiguration,
-          variables, sourceFile, sourceLabel, realMandatoryInputs, outputFile, dotdFile,
-          gcnoFile, getDwoFile(ruleContext, outputFile, cppConfiguration),
+          variables, sourceFile, shouldScanIncludes, sourceLabel, realMandatoryInputs,
+          outputFile, dotdFile, gcnoFile, getDwoFile(ruleContext, outputFile, cppConfiguration),
           optionalSourceFile, configuration, cppConfiguration, context,
           actionContext, ImmutableList.copyOf(copts),
           ImmutableList.copyOf(pluginOpts),
@@ -382,13 +388,17 @@ public class CppCompileActionBuilder {
   }
 
   public CppCompileActionBuilder setDotdFile(PathFragment outputName, String extension) {
-    if (configuration.getFragment(CppConfiguration.class).getInmemoryDotdFiles()) {
-      // Just set the path, no artifact is constructed
-      PathFragment file = FileSystemUtils.replaceExtension(outputName, extension);
-      Root root = configuration.getBinDirectory();
-      dotdFile = new DotdFile(root.getExecPath().getRelative(file));
+    if (CppFileTypes.mustProduceDotdFile(outputName.toString())) {
+      if (configuration.getFragment(CppConfiguration.class).getInmemoryDotdFiles()) {
+        // Just set the path, no artifact is constructed
+        PathFragment file = FileSystemUtils.replaceExtension(outputName, extension);
+        Root root = configuration.getBinDirectory();
+        dotdFile = new DotdFile(root.getExecPath().getRelative(file));
+      } else {
+        dotdFile = new DotdFile(ruleContext.getRelatedArtifact(outputName, extension));
+      }
     } else {
-      dotdFile = new DotdFile(ruleContext.getRelatedArtifact(outputName, extension));
+      dotdFile = null;
     }
     return this;
   }
@@ -444,5 +454,13 @@ public class CppCompileActionBuilder {
   public CppCompileActionBuilder setPicMode(boolean usePic) {
     this.usePic = usePic;
     return this;
+  }
+
+  public void setShouldScanIncludes(boolean shouldScanIncludes) {
+    this.shouldScanIncludes = shouldScanIncludes;
+  }
+
+  public boolean getShouldScanIncludes() {
+    return shouldScanIncludes;
   }
 }

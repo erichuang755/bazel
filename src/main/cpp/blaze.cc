@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -54,6 +54,8 @@
 #include <utility>
 #include <vector>
 
+#include "src/main/cpp/blaze_abrupt_exit.h"
+#include "src/main/cpp/blaze_globals.h"
 #include "src/main/cpp/blaze_startup_options.h"
 #include "src/main/cpp/blaze_util.h"
 #include "src/main/cpp/blaze_util_platform.h"
@@ -82,70 +84,6 @@ namespace blaze {
 
 ////////////////////////////////////////////////////////////////////////
 // Global Variables
-
-// The reason for a blaze server restart.
-// Keep in sync with logging.proto
-enum RestartReason {
-  NO_RESTART = 0,
-  NO_DAEMON,
-  NEW_VERSION,
-  NEW_OPTIONS
-};
-
-struct GlobalVariables {
-  // Used to make concurrent invocations of this program safe.
-  string lockfile;  // = <output_base>/lock
-  int lockfd;
-
-  string jvm_log_file;  // = <output_base>/server/jvm.out
-
-  string cwd;
-
-  // The nearest enclosing workspace directory, starting from cwd.
-  // If not under a workspace directory, this is equal to cwd.
-  string workspace;
-
-  // Option processor responsible for parsing RC files and converting them into
-  // the argument list passed on to the server.
-  OptionProcessor option_processor;
-
-  pid_t server_pid;
-
-  volatile sig_atomic_t sigint_count;
-
-  // The number of the last received signal that should cause the client
-  // to shutdown.  This is saved so that the client's WTERMSIG can be set
-  // correctly.  (Currently only SIGPIPE uses this mechanism.)
-  volatile sig_atomic_t received_signal;
-
-  // Contains the relative paths of all the files in the attached zip, and is
-  // populated during GetInstallDir().
-  vector<string> extracted_binaries;
-
-  // Parsed startup options
-  BlazeStartupOptions options;
-
-  // The time in ms the launcher spends before sending the request to the Blaze
-  uint64_t startup_time;
-
-  // The time spent on extracting the new blaze version
-  // This is part of startup_time
-  uint64_t extract_data_time;
-
-  // The time in ms if a command had to wait on a busy Blaze server process
-  // This is part of startup_time
-  uint64_t command_wait_time;
-
-  RestartReason restart_reason;
-
-  // Absolute path of the blaze binary
-  string binary_path;
-
-  // MD5 hash of the Blaze binary (includes deploy.jar, extracted binaries, and
-  // anything else that ends up under the install_base).
-  string install_md5;
-};
-
 static GlobalVariables *globals;
 
 static void InitGlobals() {
@@ -189,9 +127,10 @@ class GetInstallKeyFileProcessor : public devtools_ijar::ZipExtractorProcessor {
                        const devtools_ijar::u1 *data, const size_t size) {
     string str(reinterpret_cast<const char *>(data), size);
     blaze_util::StripWhitespace(&str);
-    if (str.size() < 32) {
+    if (str.size() != 32) {
       die(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-          "\nFailed to extract install_base_key: file too short");
+          "\nFailed to extract install_base_key: file size mismatch "
+          "(should be 32, is %zd)", str.size());
     }
     *install_base_key_ = str;
   }
@@ -260,8 +199,9 @@ static vector<string> GetArgumentArray() {
 
   vector<string> user_options;
 
-  blaze_util::SplitQuotedStringUsing(globals->options.host_jvm_args, ' ',
-                                     &user_options);
+  user_options.insert(user_options.begin(),
+                      globals->options.host_jvm_args.begin(),
+                      globals->options.host_jvm_args.end());
 
   // Add JVM arguments particular to building blaze64 and particular JVM
   // versions.
@@ -332,6 +272,11 @@ static vector<string> GetArgumentArray() {
   if (globals->options.allow_configurable_attributes) {
     result.push_back("--allow_configurable_attributes");
   }
+  if (globals->options.deep_execroot) {
+    result.push_back("--deep_execroot");
+  } else {
+    result.push_back("--nodeep_execroot");
+  }
   if (globals->options.watchfs) {
     result.push_back("--watchfs");
   }
@@ -339,10 +284,6 @@ static vector<string> GetArgumentArray() {
     result.push_back("--fatal_event_bus_exceptions");
   } else {
     result.push_back("--nofatal_event_bus_exceptions");
-  }
-  if (globals->options.webstatus_port) {
-    result.push_back("--use_webstatusserver=" + \
-                     ToString(globals->options.webstatus_port));
   }
 
   // This is only for Blaze reporting purposes; the real interpretation of the
@@ -354,8 +295,17 @@ static vector<string> GetArgumentArray() {
     result.push_back("--host_jvm_profile=" + globals->options.host_jvm_profile);
   }
   if (!globals->options.host_jvm_args.empty()) {
-    result.push_back("--host_jvm_args=" + globals->options.host_jvm_args);
+    for (const auto &arg : globals->options.host_jvm_args) {
+      result.push_back("--host_jvm_args=" + arg);
+    }
   }
+
+  if (globals->options.invocation_policy != NULL &&
+      strlen(globals->options.invocation_policy) > 0) {
+    result.push_back(string("--invocation_policy=") +
+                     globals->options.invocation_policy);
+  }
+
   globals->options.AddExtraOptions(&result);
 
   // The option sources are transmitted in the following format:
@@ -397,7 +347,6 @@ static void AddLoggingArgs(vector<string>* args) {
   args->push_back(
       string("--binary_path=") + globals->binary_path);
 }
-
 
 // Join the elements of the specified array with NUL's (\0's), akin to the
 // format of /proc/$PID/cmdline.
@@ -582,7 +531,8 @@ static void StartStandalone() {
 // resolving symbolic links.  (The server may make "socket_file" a
 // symlink, to avoid ENAMETOOLONG, in which case the client must
 // resolve it in userspace before connecting.)
-static int Connect(int socket, const string &socket_file) {
+// Returns true on success, false otherwise.
+static bool Connect(int socket, const string &socket_file) {
   struct sockaddr_un addr;
   addr.sun_family = AF_UNIX;
 
@@ -592,14 +542,14 @@ static int Connect(int socket, const string &socket_file) {
     addr.sun_path[sizeof addr.sun_path - 1] = '\0';
     free(resolved_path);
     sockaddr *paddr = reinterpret_cast<sockaddr *>(&addr);
-    return connect(socket, paddr, sizeof addr);
+    return connect(socket, paddr, sizeof addr) == 0;
   } else if (errno == ENOENT) {  // No socket means no server to connect to
     errno = ECONNREFUSED;
-    return -1;
+    return false;
   } else {
     pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
          "realpath('%s') failed", socket_file.c_str());
-    return -1;
+    return false;
   }
 }
 
@@ -663,7 +613,7 @@ static int ConnectToServer(bool start) {
   string pid_file = server_dir + "/server.pid";
 
   globals->server_pid = 0;
-  if (Connect(s, socket_file) == 0) {
+  if (Connect(s, socket_file)) {
     GetServerPid(s, pid_file);
     return s;
   }
@@ -679,13 +629,13 @@ static int ConnectToServer(bool start) {
     // Give the server one minute to start up.
     for (int ii = 0; ii < 600; ++ii) {  // 60s; enough time to connect
                                         // with debugger
-      if (Connect(s, socket_file) == 0) {
-        if (ii) {
-          fputc('\n', stderr);
-          fflush(stderr);
-        }
-        GetServerPid(s, pid_file);
-        return s;
+                                        if (Connect(s, socket_file)) {
+                                          if (ii) {
+                                            fputc('\n', stderr);
+                                            fflush(stderr);
+                                          }
+                                          GetServerPid(s, pid_file);
+                                          return s;
       }
       fputc('.', stderr);
       fflush(stderr);
@@ -707,18 +657,31 @@ static int ConnectToServer(bool start) {
   return -1;
 }
 
+// Poll until the given process denoted by pid goes away. Return false if this
+// does not occur within wait_time_secs.
+static bool WaitForServerDeath(pid_t pid, int wait_time_secs) {
+  for (int ii = 0; ii < wait_time_secs * 10; ++ii) {
+    if (kill(pid, 0) == -1) {
+      if (errno == ESRCH) {
+        return true;
+      }
+      pdie(blaze_exit_code::INTERNAL_ERROR, "could not be killed");
+    }
+    poll(NULL, 0, 100);  // sleep 100ms.  (usleep(3) is obsolete.)
+  }
+  return false;
+}
+
 // Kills the specified running Blaze server.
 static void KillRunningServer(pid_t server_pid) {
   if (server_pid == -1) return;
   fprintf(stderr, "Sending SIGTERM to previous %s server (pid=%d)... ",
           globals->options.GetProductName().c_str(), server_pid);
   fflush(stderr);
-  for (int ii = 0; ii < 100; ++ii) {  // wait up to 10s
-    if (kill(server_pid, SIGTERM) == -1) {
-      fprintf(stderr, "done.\n");
-      return;  // Ding! Dong! The witch is dead!
-    }
-    poll(NULL, 0, 100);  // sleep 100ms.  (usleep(3) is obsolete.)
+  kill(server_pid, SIGTERM);
+  if (WaitForServerDeath(server_pid, 10)) {
+    fprintf(stderr, "done.\n");
+    return;
   }
 
   // If the previous attempt did not suceeded, kill the whole group.
@@ -727,25 +690,23 @@ static void KillRunningServer(pid_t server_pid) {
           globals->options.GetProductName().c_str(), server_pid);
   fflush(stderr);
   killpg(server_pid, SIGKILL);
-  if (kill(server_pid, 0) == -1) {  // (probe)
-    fprintf(stderr, "could not be killed.\n");  // task state 'Z' or 'D'?
-    exit(1);  // TODO(bazel-team): confirm whether this is an internal error.
-  } else {
+  if (WaitForServerDeath(server_pid, 10)) {
     fprintf(stderr, "killed.\n");
+    return;
   }
+  // Process did not go away 10s after SIGKILL. Stuck in state 'Z' or 'D'?
+  pdie(blaze_exit_code::INTERNAL_ERROR, "SIGKILL unsuccessful after 10s");
 }
-
 
 // Kills the running Blaze server, if any.  Finds the pid from the socket.
 static bool KillRunningServerIfAny() {
-  int socket = ConnectToServer(false);
+  int socket = ConnectToServer(/*start=*/false);
   if (socket != -1) {
     KillRunningServer(globals->server_pid);
     return true;
   }
   return false;
 }
-
 
 // Calls fsync() on the file (or directory) specified in 'file_path'.
 // pdie()'s if syncing fails.
@@ -1012,8 +973,7 @@ static bool ServerNeedsToBeKilled(const vector<string>& args1,
 
 // Kills the running Blaze server, if any, if the startup options do not match.
 static void KillRunningServerIfDifferentStartupOptions() {
-  int socket = ConnectToServer(false);
-
+  int socket = ConnectToServer(/*start=*/false);
   if (socket == -1) {
     return;
   }
@@ -1153,7 +1113,7 @@ static char read_server_char(FILE *fp) {
             "Contents of '%s':\n", globals->options.GetProductName().c_str(),
             globals->jvm_log_file.c_str());
     WriteFileToStreamOrDie(stderr, globals->jvm_log_file.c_str());
-    exit(blaze_exit_code::INTERNAL_ERROR);
+    exit(GetExitCodeForAbruptExit(*globals));
   }
   return static_cast<char>(c);
 }
@@ -1180,17 +1140,32 @@ static string BuildServerRequest() {
 
 // Performs all I/O for a single client request to the server, and
 // shuts down the client (by exit or signal).
-static void SendServerRequest(void) ATTRIBUTE_NORETURN;
-static void SendServerRequest(void) {
+static ATTRIBUTE_NORETURN void SendServerRequest() {
   int socket = -1;
   while (true) {
-    socket = ConnectToServer(true);
-
+    socket = ConnectToServer(/*start=*/true);
     // Check for deleted server cwd:
     string server_cwd = GetProcessCWD(globals->server_pid);
-    if (server_cwd.empty() ||  // GetProcessCWD failed
-        server_cwd != globals->workspace ||  // changed
-        server_cwd.find(" (deleted)") != string::npos) {  // deleted.
+    // TODO(bazel-team): Is this check even necessary? If someone deletes or
+    // moves the server directory, the client cannot connect to the server
+    // anymore. IOW, the client finds the server based on the output base,
+    // so if a server is found, it should be by definition at the correct output
+    // base.
+    //
+    // If server_cwd is empty, GetProcessCWD failed. This notably occurs when
+    // running under Docker because then readlink(/proc/[pid]/cwd) returns
+    // EPERM.
+    // Docker issue #6687 (https://github.com/docker/docker/issues/6687) fixed
+    // this, but one still needs the --cap-add SYS_PTRACE command line flag, at
+    // least according to the discussion on Docker issue #6800
+    // (https://github.com/docker/docker/issues/6687), and even then, it's a
+    // non-default Docker flag. Given that this occurs only in very weird
+    // cases, it's better to assume that everything is alright if we can't get
+    // the cwd.
+
+    if (!server_cwd.empty() &&
+        (server_cwd != globals->workspace ||  // changed
+         server_cwd.find(" (deleted)") != string::npos)) {  // deleted.
       // There's a distant possibility that the two paths look the same yet are
       // actually different because the two processes have different mount
       // tables.
@@ -1322,7 +1297,6 @@ static void SendServerRequest(void) {
 }
 
 // Parse the options, storing parsed values in globals.
-// Returns the index of the first non-option argument.
 static void ParseOptions(int argc, const char *argv[]) {
   string error;
   blaze_exit_code::ExitCode parse_exit_code =

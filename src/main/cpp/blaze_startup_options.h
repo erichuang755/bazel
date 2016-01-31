@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -117,6 +117,10 @@ class BlazeStartupOptions {
   // output_base.
   string output_user_root;
 
+  // Whether to put the execroot at $OUTPUT_BASE/$WORKSPACE_NAME (if false) or
+  // $OUTPUT_BASE/execroot/$WORKSPACE_NAME (if true).
+  bool deep_execroot;
+
   // Block for the Blaze server lock. Otherwise,
   // quit with non-0 exit code if lock can't
   // be acquired immediately.
@@ -126,7 +130,7 @@ class BlazeStartupOptions {
 
   string host_jvm_profile;
 
-  string host_jvm_args;
+  std::vector<string> host_jvm_args;
 
   bool batch;
 
@@ -188,8 +192,19 @@ class BlazeStartupOptions {
   // Returns the path for the system-wide rc file.
   static string SystemWideRcPath();
 
-  // Returns the search paths for the RC file in the workspace.
+  // Returns the candidate pathnames for the RC file in the workspace,
+  // the first readable one of which will be chosen.
+  // It is ok if no usable candidate exists.
   static void WorkspaceRcFileSearchPath(std::vector<string>* candidates);
+
+  // Turn a %workspace%-relative import into its true name in the filesystem.
+  // path_fragment is modified in place.
+  // Unlike WorkspaceRcFileSearchPath, it is an error if no import file exists.
+  static bool WorkspaceRelativizeRcFilePath(const string &workspace,
+                                            string *path_fragment);
+
+  static constexpr char WorkspacePrefix[] = "%workspace%/";
+  static const int WorkspacePrefixLength = sizeof WorkspacePrefix - 1;
 
   // Returns the GetHostJavabase. This should be called after parsing
   // the --host_javabase option.
@@ -197,6 +212,9 @@ class BlazeStartupOptions {
 
   // Port for web status server, 0 to disable
   int webstatus_port;
+
+  // Invocation policy proto. May be NULL.
+  const char* invocation_policy;
 
  private:
   string host_javabase;

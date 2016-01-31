@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -27,138 +27,113 @@ import com.google.devtools.build.lib.view.config.crosstool.CrosstoolConfig.Compi
 class X86Crosstools {
 
   private final NdkPaths ndkPaths;
+  private final StlImpl stlImpl;
 
-  X86Crosstools(NdkPaths ndkPaths) {
+  X86Crosstools(NdkPaths ndkPaths, StlImpl stlImpl) {
     this.ndkPaths = ndkPaths;
+    this.stlImpl = stlImpl;
   }
 
   ImmutableList<CToolchain.Builder> createCrosstools() {
 
-    ImmutableList.Builder<CToolchain.Builder> builder = ImmutableList.builder();
+    ImmutableList.Builder<CToolchain.Builder> toolchains = ImmutableList.builder();
 
     /**
      * x86
      */
 
-    builder.add(
-        createBaseX86Toolchain()
-            .setToolchainIdentifier("x86-4.8")
-            .setTargetCpu("x86")
-            .setCompiler("gcc-4.8")
+    // gcc 4.8
+    toolchains.add(createX86Toolchain("4.8", "-fstack-protector", CppConfiguration.Tool.GCOVTOOL));
 
-            .addAllToolPath(
-                ndkPaths.createToolpaths(
-                    "x86-4.8",
-                    "i686-linux-android",
-                    // gcc-4.8 x86 toolchain doesn't have gcov-tool.
-                    CppConfiguration.Tool.GCOVTOOL))
-
-            .addAllCxxBuiltinIncludeDirectory(
-                ndkPaths.createToolchainIncludePaths("x86-4.8", "i686-linux-android", "4.8"))
-
-            .setBuiltinSysroot(ndkPaths.createBuiltinSysroot("x86"))
-
-            .setSupportsEmbeddedRuntimes(true)
-            .setStaticRuntimesFilegroup("static-runtime-libs-" + "x86-4.8")
-            .setDynamicRuntimesFilegroup("dynamic-runtime-libs-" + "x86-4.8")
-
-            .addCompilerFlag("-fstack-protector"));
-
-    builder.add(
-        createBaseX86Toolchain()
-            .setToolchainIdentifier("x86-4.9")
-            .setTargetCpu("x86")
-            .setCompiler("gcc-4.9")
-
-            .addAllToolPath(ndkPaths.createToolpaths("x86-4.9", "i686-linux-android"))
-
-            .addAllCxxBuiltinIncludeDirectory(
-                ndkPaths.createToolchainIncludePaths("x86-4.9", "i686-linux-android", "4.9"))
-
-            .setBuiltinSysroot(ndkPaths.createBuiltinSysroot("x86"))
-
-            .setSupportsEmbeddedRuntimes(true)
-            .setStaticRuntimesFilegroup("static-runtime-libs-" + "x86-4.9")
-            .setDynamicRuntimesFilegroup("dynamic-runtime-libs-" + "x86-4.9")
-
-            .addCompilerFlag("-fstack-protector-strong"));
+    // gcc 4.9
+    toolchains.add(createX86Toolchain("4.9", "-fstack-protector-strong"));
 
     // Add Clang toolchains. x86 uses gcc-4.8.
-    for (String clangVersion : new String[] { "3.5", "3.6" }) {      
-      builder.add(
-          createX86ClangToolchain("x86", "i686", "4.8")
-              .setToolchainIdentifier("x86-clang" + clangVersion)
-              .setTargetCpu("x86")
+    for (String clangVersion : new String[] { "3.5", "3.6" }) {
 
-              .addAllToolPath(
-                  ndkPaths.createClangToolpaths(
-                      "x86-4.8",
-                      "i686-linux-android",
-                      clangVersion,
-                      // gcc-4.8 x86 toolchain doesn't have gcov-tool.
-                      CppConfiguration.Tool.GCOVTOOL))
+      CToolchain.Builder x86Clang = createBaseX86ClangToolchain("x86", "i686", "4.8", clangVersion)
+          .setToolchainIdentifier("x86-clang" + clangVersion)
+          .setTargetCpu("x86")
 
-              .addAllCxxBuiltinIncludeDirectory(
-                  ndkPaths.createToolchainIncludePaths("x86-4.8", "i686-linux-android", "4.8"))
+          .addAllToolPath(ndkPaths.createClangToolpaths(
+              "x86-4.8", "i686-linux-android", clangVersion,
+              // gcc-4.8 x86 toolchain doesn't have gcov-tool.
+              CppConfiguration.Tool.GCOVTOOL))
 
-              .setBuiltinSysroot(ndkPaths.createBuiltinSysroot("x86"))
+          .setBuiltinSysroot(ndkPaths.createBuiltinSysroot("x86"));
 
-              .setSupportsEmbeddedRuntimes(true)
-              .setStaticRuntimesFilegroup("static-runtime-libs-" + "x86-clang" + clangVersion)
-              .setDynamicRuntimesFilegroup("dynamic-runtime-libs-" + "x86-clang" + clangVersion));
+      ndkPaths.addToolchainIncludePaths(x86Clang, "x86-4.8", "i686-linux-android", "4.8");
+      stlImpl.addStlImpl(x86Clang, "4.8");
+      toolchains.add(x86Clang);
     }
 
     /**
      * x86_64
      */
 
-    builder.add(
-        createBaseX86Toolchain()
-            .setToolchainIdentifier("x86_64-4.9")
-            .setTargetCpu("x86_64")
-            .setCompiler("gcc-4.9")
+    CToolchain.Builder x8664 = createBaseX86Toolchain()
+        .setToolchainIdentifier("x86_64-4.9")
+        .setTargetCpu("x86_64")
+        .setCompiler("gcc-4.9")
 
-            .addAllToolPath(ndkPaths.createToolpaths("x86_64-4.9", "x86_64-linux-android"))
+        .addAllToolPath(ndkPaths.createToolpaths(
+            "x86_64-4.9", "x86_64-linux-android"))
 
-            .addAllCxxBuiltinIncludeDirectory(
-                ndkPaths.createToolchainIncludePaths("x86_64-4.9", "x86_64-linux-android", "4.9"))
+        .setBuiltinSysroot(ndkPaths.createBuiltinSysroot("x86_64"))
 
-            .setBuiltinSysroot(ndkPaths.createBuiltinSysroot("x86_64"))
+        .addCompilerFlag("-fstack-protector-strong");
 
-            .setSupportsEmbeddedRuntimes(true)
-            .setStaticRuntimesFilegroup("static-runtime-libs-" + "x86_64-4.9")
-            .setDynamicRuntimesFilegroup("static-runtime-libs-" + "x86_64-4.9")
-
-            .addCompilerFlag("-fstack-protector-strong"));
+    ndkPaths.addToolchainIncludePaths(x8664, "x86_64-4.9", "x86_64-linux-android", "4.9");
+    stlImpl.addStlImpl(x8664, "4.9");
+    toolchains.add(x8664);
 
     // Add Clang toolchains. x86_64 uses gcc-4.9.
     for (String clangVersion : new String[] { "3.5", "3.6" }) {
-      builder.add(
-          createX86ClangToolchain("x86_64", "x86_64", "4.9")
+
+      CToolchain.Builder x8664Clang =
+          createBaseX86ClangToolchain("x86_64", "x86_64", "4.9", clangVersion)
               .setToolchainIdentifier("x86_64-clang" + clangVersion)
               .setTargetCpu("x86_64")
+    
+              .addAllToolPath(ndkPaths.createClangToolpaths(
+                  "x86_64-4.9", "x86_64-linux-android", clangVersion))
+    
+              .setBuiltinSysroot(ndkPaths.createBuiltinSysroot("x86_64"));
 
-              .addAllToolPath(
-                  ndkPaths.createClangToolpaths("x86_64-4.9", "x86_64-linux-android", clangVersion))
-
-              .addAllCxxBuiltinIncludeDirectory(
-                  ndkPaths.createToolchainIncludePaths("x86_64-4.9", "x86_64-linux-android", "4.9"))
-
-              .setBuiltinSysroot(ndkPaths.createBuiltinSysroot("x86_64"))
-
-              .setSupportsEmbeddedRuntimes(true)
-              .setStaticRuntimesFilegroup("static-runtime-libs-" + "x86_64-clang" + clangVersion)
-              .setDynamicRuntimesFilegroup(
-                  "dynamic-runtime-libs-" + "x86_64-clang" + clangVersion));
+      ndkPaths.addToolchainIncludePaths(x8664Clang, "x86_64-4.9", "x86_64-linux-android", "4.9");
+      stlImpl.addStlImpl(x8664Clang, "4.9");
+      toolchains.add(x8664Clang);
     }
 
-    ImmutableList<CToolchain.Builder> toolchainBuilders = builder.build();
-    
+    ImmutableList<CToolchain.Builder> toolchainBuilders = toolchains.build();
+
+    // x86_64 also sets "x86-linux-android"
     for (CToolchain.Builder toolchainBuilder : toolchainBuilders) {
       toolchainBuilder.setTargetSystemName("x86-linux-android");
     }
 
     return toolchainBuilders;
+  }
+
+  private CToolchain.Builder createX86Toolchain(
+      String gccVersion, String stackProtrectorFlag, CppConfiguration.Tool... excludedTools) {
+
+    CToolchain.Builder toolchain = createBaseX86Toolchain()
+        .setToolchainIdentifier("x86-" + gccVersion)
+        .setTargetCpu("x86")
+        .setCompiler("gcc-" + gccVersion)
+    
+        .addAllToolPath(ndkPaths.createToolpaths(
+            "x86-" + gccVersion, "i686-linux-android", excludedTools))
+
+        .setBuiltinSysroot(ndkPaths.createBuiltinSysroot("x86"))
+    
+        .addCompilerFlag(stackProtrectorFlag);
+
+    ndkPaths.addToolchainIncludePaths(
+        toolchain, "x86-" + gccVersion, "i686-linux-android", gccVersion);
+    stlImpl.addStlImpl(toolchain, gccVersion);
+    return toolchain;
   }
   
   private CToolchain.Builder createBaseX86Toolchain() {
@@ -167,32 +142,35 @@ class X86Crosstools {
         .addCompilerFlag("-ffunction-sections")
         .addCompilerFlag("-funwind-tables")
         .addCompilerFlag("-no-canonical-prefixes")
-  
+        .addCompilerFlag("-fno-canonical-system-headers")
+
         // Linker flags
         .addLinkerFlag("-no-canonical-prefixes")
-  
+
         // Additional release flags
-        .addCompilationModeFlags(CompilationModeFlags.newBuilder()
-            .setMode(CompilationMode.OPT)
-            .addCompilerFlag("-O2")
-            .addCompilerFlag("-g")
-            .addCompilerFlag("-DNDEBUG")
-            .addCompilerFlag("-fomit-frame-pointer")
-            .addCompilerFlag("-fstrict-aliasing")
-            .addCompilerFlag("-funswitch-loops")
-            .addCompilerFlag("finline-limit=300"))
-  
+        .addCompilationModeFlags(
+            CompilationModeFlags.newBuilder()
+                .setMode(CompilationMode.OPT)
+                .addCompilerFlag("-O2")
+                .addCompilerFlag("-g")
+                .addCompilerFlag("-DNDEBUG")
+                .addCompilerFlag("-fomit-frame-pointer")
+                .addCompilerFlag("-fstrict-aliasing")
+                .addCompilerFlag("-funswitch-loops")
+                .addCompilerFlag("-finline-limit=300"))
+
         // Additional debug flags
-        .addCompilationModeFlags(CompilationModeFlags.newBuilder()
-            .setMode(CompilationMode.DBG)
-            .addCompilerFlag("-O0")
-            .addCompilerFlag("-g")
-            .addCompilerFlag("-fno-omit-frame-pointer")
-            .addCompilerFlag("-fno-strict-aliasing"));
+        .addCompilationModeFlags(
+            CompilationModeFlags.newBuilder()
+                .setMode(CompilationMode.DBG)
+                .addCompilerFlag("-O0")
+                .addCompilerFlag("-g")
+                .addCompilerFlag("-fno-omit-frame-pointer")
+                .addCompilerFlag("-fno-strict-aliasing"));
   }
 
-  private CToolchain.Builder createX86ClangToolchain(
-      String x86Arch, String llvmArch, String gccVersion) {
+  private CToolchain.Builder createBaseX86ClangToolchain(
+      String x86Arch, String llvmArch, String gccVersion, String clangVersion) {
 
     String gccToolchain = ndkPaths.createGccToolchainPath(
         String.format("%s-linux-android-%s", x86Arch, gccVersion));
@@ -200,7 +178,7 @@ class X86Crosstools {
     String llvmTriple = llvmArch + "-none-linux-android";
 
     return CToolchain.newBuilder()
-        .setCompiler("gcc-" + gccVersion)
+        .setCompiler("clang" + clangVersion)
 
         // Compiler flags
         .addCompilerFlag("-gcc-toolchain")
@@ -214,6 +192,7 @@ class X86Crosstools {
         .addCompilerFlag("-Wno-invalid-command-line-argument")
         .addCompilerFlag("-Wno-unused-command-line-argument")
         .addCompilerFlag("-no-canonical-prefixes")
+        .addCompilerFlag("-fno-canonical-system-headers")
 
         // Linker flags
         .addLinkerFlag("-gcc-toolchain")

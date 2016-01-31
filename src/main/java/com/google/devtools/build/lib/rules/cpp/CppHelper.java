@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,7 +15,6 @@
 package com.google.devtools.build.lib.rules.cpp;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.ActionOwner;
@@ -30,17 +29,19 @@ import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
+import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
+import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.packages.RuleErrorConsumer;
-import com.google.devtools.build.lib.packages.Type;
 import com.google.devtools.build.lib.rules.cpp.CcLinkParams.Linkstamp;
 import com.google.devtools.build.lib.rules.cpp.CppCompilationContext.Builder;
 import com.google.devtools.build.lib.rules.cpp.Link.LinkTargetType;
 import com.google.devtools.build.lib.shell.ShellUtils;
-import com.google.devtools.build.lib.syntax.Label;
-import com.google.devtools.build.lib.syntax.Label.SyntaxException;
+import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.util.FileTypeSet;
 import com.google.devtools.build.lib.util.IncludeScanningUtil;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.view.config.crosstool.CrosstoolConfig.LipoMode;
 
@@ -67,6 +68,9 @@ public class CppHelper {
       CppFileTypes.CPP_HEADER,
       CppFileTypes.CPP_SOURCE);
 
+  private static final ImmutableList<String> LINKOPTS_PREREQUISITE_LABEL_KINDS =
+      ImmutableList.of("deps", "srcs");
+
   private CppHelper() {
     // prevents construction
   }
@@ -77,11 +81,14 @@ public class CppHelper {
    */
   public static void mergeToolchainDependentContext(RuleContext ruleContext,
       Builder contextBuilder) {
-    TransitiveInfoCollection stl = ruleContext.getPrerequisite(":stl", Mode.TARGET);
-    if (stl != null) {
-      // TODO(bazel-team): Clean this up.
-      contextBuilder.addSystemIncludeDir(stl.getLabel().getPackageFragment().getRelative("gcc3"));
-      contextBuilder.mergeDependentContext(stl.getProvider(CppCompilationContext.class));
+    if (ruleContext.getRule().getAttributeDefinition(":stl") != null) {
+      TransitiveInfoCollection stl = ruleContext.getPrerequisite(":stl", Mode.TARGET);
+      if (stl != null) {
+        // TODO(bazel-team): Clean this up.
+        contextBuilder.addSystemIncludeDir(
+            stl.getLabel().getPackageIdentifier().getPathFragment().getRelative("gcc3"));
+        contextBuilder.mergeDependentContext(stl.getProvider(CppCompilationContext.class));
+      }
     }
     CcToolchainProvider toolchain = getToolchain(ruleContext);
     if (toolchain != null) {
@@ -189,16 +196,18 @@ public class CppHelper {
       String labelName) {
     try {
       Label label = ruleContext.getLabel().getRelative(labelName);
-      for (FileProvider target : ruleContext
-          .getPrerequisites("deps", Mode.TARGET, FileProvider.class)) {
-        if (target.getLabel().equals(label)) {
-          for (Artifact artifact : target.getFilesToBuild()) {
-            linkopts.add(artifact.getExecPathString());
+      for (String prereqKind : LINKOPTS_PREREQUISITE_LABEL_KINDS) {
+        for (FileProvider target : ruleContext
+            .getPrerequisites(prereqKind, Mode.TARGET, FileProvider.class)) {
+          if (target.getLabel().equals(label)) {
+            for (Artifact artifact : target.getFilesToBuild()) {
+              linkopts.add(artifact.getExecPathString());
+            }
+            return true;
           }
-          return true;
         }
       }
-    } catch (SyntaxException e) {
+    } catch (LabelSyntaxException e) {
       // Quietly ignore and fall through.
     }
     linkopts.add(labelName);
@@ -253,15 +262,15 @@ public class CppHelper {
    * performance problems if many headers are generated.
    */
   @Nullable
-  public static final Map<Artifact, Artifact> createExtractInclusions(RuleContext ruleContext,
-      Iterable<Artifact> prerequisites) {
+  public static final Map<Artifact, Artifact> createExtractInclusions(
+      RuleContext ruleContext, CppSemantics semantics, Iterable<Artifact> prerequisites) {
     Map<Artifact, Artifact> extractions = new HashMap<>();
     for (Artifact prerequisite : prerequisites) {
       if (extractions.containsKey(prerequisite)) {
         // Don't create duplicate actions just because user specified same header file twice.
         continue;
       }
-      Artifact scanned = createExtractInclusions(ruleContext, prerequisite);
+      Artifact scanned = createExtractInclusions(ruleContext, semantics, prerequisite);
       if (scanned != null) {
         extractions.put(prerequisite, scanned);
       }
@@ -277,13 +286,13 @@ public class CppHelper {
    * .cc source in serial. For high-latency file systems, this could cause
    * performance problems if many headers are generated.
    */
-  private static final Artifact createExtractInclusions(RuleContext ruleContext,
-      Artifact prerequisite) {
-    if (ruleContext != null &&
-        ruleContext.getFragment(CppConfiguration.class).needsIncludeScanning() &&
-        !prerequisite.isSourceArtifact() &&
-        CPP_FILETYPES.matches(prerequisite.getFilename())) {
-      Artifact scanned = getIncludesOutput(ruleContext, prerequisite);
+  private static final Artifact createExtractInclusions(
+      RuleContext ruleContext, CppSemantics semantics, Artifact prerequisite) {
+    if (ruleContext != null
+        && semantics.needsIncludeScanning(ruleContext)
+        && !prerequisite.isSourceArtifact()
+        && CPP_FILETYPES.matches(prerequisite.getFilename())) {
+      Artifact scanned = getIncludesOutput(ruleContext, semantics, prerequisite);
       ruleContext.registerAction(
           new ExtractInclusionAction(ruleContext.getActionOwner(), prerequisite, scanned));
       return scanned;
@@ -291,8 +300,9 @@ public class CppHelper {
     return null;
   }
 
-  private static Artifact getIncludesOutput(RuleContext ruleContext, Artifact src) {
-    Root root = ruleContext.getFragment(CppConfiguration.class).getGreppedIncludesDirectory();
+  private static Artifact getIncludesOutput(
+      RuleContext ruleContext, CppSemantics semantics, Artifact src) {
+    Root root = semantics.getGreppedIncludesDirectory(ruleContext);
     PathFragment relOut = IncludeScanningUtil.getRootRelativeOutputPath(src.getExecPath());
     return ruleContext.getShareableArtifact(relOut, root);
   }
@@ -351,7 +361,7 @@ public class CppHelper {
       scannableBuilder.addTransitive(dep.getTransitiveIncludeScannables());
     }
 
-    if (ruleContext.attributes().has("malloc", Type.LABEL)) {
+    if (ruleContext.attributes().has("malloc", BuildType.LABEL)) {
       TransitiveInfoCollection malloc = mallocForTarget(ruleContext);
       TransitiveLipoInfoProvider provider = malloc.getProvider(TransitiveLipoInfoProvider.class);
       if (provider != null) {

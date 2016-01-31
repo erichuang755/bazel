@@ -19,13 +19,99 @@ android_library(
 )
 
 java_import(
+    name = "design_import",
+    jars = ["extras/android/support/design/libs/android-support-design.jar"],
+)
+
+android_library(
+    name = "design",
+    custom_package = "android.support.design",
+    manifest = "extras/android/support/design/AndroidManifest.xml",
+    resource_files = glob(["extras/android/support/design/res/**"]),
+    deps = [":design_import", ":appcompat_v7"]
+)
+
+java_import(
+    name = "mediarouter_v7_import",
+    jars = ["extras/android/support/v7/mediarouter/libs/android-support-v7-mediarouter.jar"]
+)
+
+android_library(
+    name = "mediarouter_v7",
+    custom_package = "android.support.v7.mediarouter",
+    manifest = "extras/android/support/v7/mediarouter/AndroidManifest.xml",
+    resource_files = glob(["extras/android/support/v7/mediarouter/res/**"]),
+    deps = [
+        ":appcompat_v7",
+        ":mediarouter_v7_import",
+    ]
+)
+
+java_import(
+    name = "cardview_v7_import",
+    jars = ["extras/android/support/v7/cardview/libs/android-support-v7-cardview.jar"]
+)
+
+android_library(
+    name = "cardview_v7",
+    custom_package = "android.support.v7.cardview",
+    manifest = "extras/android/support/v7/cardview/AndroidManifest.xml",
+    resource_files = glob(["extras/android/support/v7/cardview/res/**"]),
+    deps = [":cardview_v7_import"]
+)
+
+java_import(
+    name = "gridlayout_v7_import",
+    jars = ["extras/android/support/v7/gridlayout/libs/android-support-v7-gridlayout.jar"]
+)
+
+android_library(
+    name = "gridlayout_v7",
+    custom_package = "android.support.v7.gridlayout",
+    manifest = "extras/android/support/v7/gridlayout/AndroidManifest.xml",
+    resource_files = glob(["extras/android/support/v7/gridlayout/res/**"]),
+    deps = [":gridlayout_v7_import"]
+)
+
+java_import(
+    name = "palette_v7_import",
+    jars = ["extras/android/support/v7/palette/libs/android-support-v7-palette.jar"]
+)
+
+android_library(
+    name = "palette_v7",
+    custom_package = "android.support.v7.palette",
+    manifest = "extras/android/support/v7/palette/AndroidManifest.xml",
+    resource_files = glob(["extras/android/support/v7/palette/res/**"]),
+    deps = [":palette_v7_import"]
+)
+
+java_import(
+    name = "recyclerview_v7_import",
+    jars = ["extras/android/support/v7/recyclerview/libs/android-support-v7-recyclerview.jar"]
+)
+
+android_library(
+    name = "recyclerview_v7",
+    custom_package = "android.support.v7.recyclerview",
+    manifest = "extras/android/support/v7/recyclerview/AndroidManifest.xml",
+    resource_files = glob(["extras/android/support/v7/recyclerview/res/**"]),
+    deps = [":recyclerview_v7_import"]
+)
+
+java_import(
     name = "appcompat_v4",
     jars = ["extras/android/support/v4/android-support-v4.jar"]
 )
 
+java_import(
+    name = "appcompat_v13",
+    jars = ["extras/android/support/v13/android-support-v13.jar"]
+)
+
 android_sdk(
     name = "sdk",
-    proguard = "tools/proguard/bin/proguard.sh",
+    proguard = ":proguard_binary",
     aapt = ":aapt_binary",
     dx = ":dx_binary",
     main_dex_list_creator = ":main_dex_list_creator",
@@ -36,12 +122,23 @@ android_sdk(
     shrinked_android_jar = "platforms/android-%api_level%/android.jar",
     annotations_jar = "tools/support/annotations.jar",
     main_dex_classes = "build-tools/%build_tools_version%/mainDexClasses.rules",
-    apkbuilder = ":apkbuilder_binary",
+    apkbuilder = "@bazel_tools//third_party/java/apkbuilder:embedded_apkbuilder",
     zipalign = ":zipalign_binary",
     android_jack = ":empty",
     jack = ":fail",
     jill = ":fail",
     resource_extractor = ":fail"
+)
+
+java_import(
+    name = "proguard_import",
+    jars = ["tools/proguard/lib/proguard.jar"]
+)
+
+java_binary(
+    name = "proguard_binary",
+    main_class = "proguard.ProGuard",
+    runtime_deps = [":proguard_import"]
 )
 
 filegroup(
@@ -55,9 +152,9 @@ filegroup(
      srcs = [],
      cmd  = "\n".join(["cat > $@ << 'EOF'",
          "#!/bin/bash -eu",
-         "BINARY=$${0##*-out/host/bin/}",
-         "DIRNAME=$$(dirname $$BINARY)",
-         "SDK=$${0}.runfiles/$${DIRNAME}",
+         # The tools under build-tools/VERSION require the libraries under build-tools/VERSION/lib,
+         # so we can't simply depend on them as a file like we do with aapt.
+         "SDK=$${0}.runfiles/external/%repository_name%",
          "exec $${SDK}/build-tools/%build_tools_version%/" + tool + " $$*",
          "EOF\n"]),
 ) for tool in ["aapt", "aidl", "zipalign"]]
@@ -130,35 +227,17 @@ java_import(
     jars = [":dx_jar"],
 )
 
-genrule(
-    name = "apkbuilder_source",
-    srcs = [],
-    outs = ["apkbuilder_binary.sh"],
-    cmd = "\n".join(["cat > $@ << 'EOF'",
-        "#!/bin/bash -eu",
-        "BINARY=$${0##*-out/host/bin/}",
-        "DIRNAME=$$(dirname $$BINARY)",
-        "APKBUILDER=$${0}.runfiles/$${DIRNAME}/apkbuilder",
-        "if [[ -n \"$${KEYSTORE-}\" ]]; then",
-        "  mkdir -p /tmp/keystore/.android",
-        "  cp $$KEYSTORE /tmp/keystore/.android/debug.keystore",
-        "  export ANDROID_SDK_HOME=/tmp/keystore",
-        "fi",
-        "exec $$APKBUILDER $$*",
-        "EOF"]),
-)
-
-sh_binary(
-    name = "apkbuilder_binary",
-    srcs = ["apkbuilder_binary.sh"],
-    data = [":apkbuilder"],
-)
-
-java_binary(
-    name = "apkbuilder",
-    runtime_deps = [":sdklib"],
-    main_class = "com.android.sdklib.build.ApkBuilderMain")
+GOOGLE_PLAY_SERVICES_DIR = "extras/google/google_play_services/libproject/google-play-services_lib"
 
 java_import(
-    name = "sdklib",
-    jars = ["tools/lib/sdklib.jar", "tools/lib/common.jar", "tools/lib/guava-17.0.jar"])
+    name = "google_play_services_lib",
+    jars = [GOOGLE_PLAY_SERVICES_DIR + "/libs/google-play-services.jar"])
+
+android_library(
+    name = "google_play_services",
+    custom_package = "google.bazel",
+    manifest = GOOGLE_PLAY_SERVICES_DIR + "/AndroidManifest.xml",
+    exports_manifest = 1,
+    resource_files = glob([GOOGLE_PLAY_SERVICES_DIR + "/res/**"]),
+    proguard_specs = [GOOGLE_PLAY_SERVICES_DIR + "/proguard.txt"],
+    deps = [":google_play_services_lib"])

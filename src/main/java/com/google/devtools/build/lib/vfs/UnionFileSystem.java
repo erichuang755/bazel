@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,9 +14,9 @@
 
 package com.google.devtools.build.lib.vfs;
 
-import com.google.common.base.Preconditions;
 import com.google.common.collect.Lists;
 import com.google.devtools.build.lib.concurrent.ThreadSafety;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.util.StringTrie;
 
 import java.io.IOException;
@@ -160,7 +160,7 @@ public class UnionFileSystem extends FileSystem {
   }
 
   @Override
-  public boolean supportsSymbolicLinks() {
+  public boolean supportsSymbolicLinksNatively() {
     return true;
   }
 
@@ -248,9 +248,15 @@ public class UnionFileSystem extends FileSystem {
   }
 
   @Override
+  protected boolean isSpecialFile(Path path, boolean followSymlinks) {
+    FileSystem delegate = getDelegate(path);
+    return delegate.isSpecialFile(adjustPath(path, delegate), followSymlinks);
+  }
+
+  @Override
   protected void createSymbolicLink(Path linkPath, PathFragment targetFragment) throws IOException {
     checkModifiable();
-    if (!supportsSymbolicLinks()) {
+    if (!supportsSymbolicLinksNatively()) {
       throw new UnsupportedOperationException(
           "Attempted to create a symlink, but symlink support is disabled.");
     }
@@ -368,9 +374,9 @@ public class UnionFileSystem extends FileSystem {
   }
 
   @Override
-  protected byte[] getxattr(Path path, String name, boolean followSymlinks) throws IOException {
+  protected byte[] getxattr(Path path, String name) throws IOException {
     FileSystem delegate = getDelegate(path);
-    return delegate.getxattr(adjustPath(path, delegate), name, followSymlinks);
+    return delegate.getxattr(adjustPath(path, delegate), name);
   }
 
   @Override

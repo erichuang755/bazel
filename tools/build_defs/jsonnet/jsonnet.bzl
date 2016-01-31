@@ -1,4 +1,4 @@
-# Copyright 2015 Google Inc. All rights reserved.
+# Copyright 2015 The Bazel Authors. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
 
 """Jsonnet rules for Bazel."""
 
-JSONNET_FILETYPE = FileType([".jsonnet"])
+_JSONNET_FILETYPE = FileType([".jsonnet"])
 
 def _setup_deps(deps):
   """Collects source files and import flags of transitive dependencies.
@@ -33,7 +33,7 @@ def _setup_deps(deps):
   imports = set()
   for dep in deps:
     transitive_sources += dep.transitive_jsonnet_files
-    imports += dep.imports
+    imports += ["%s/%s" % (dep.label.package, im) for im in dep.imports]
 
   return struct(
       transitive_sources = transitive_sources,
@@ -57,15 +57,21 @@ def _jsonnet_to_json_impl(ctx):
   """Implementation of the jsonnet_to_json rule."""
   depinfo = _setup_deps(ctx.attr.deps)
   toolchain = _jsonnet_toolchain(ctx)
+  jsonnet_vars = ctx.attr.vars
+  jsonnet_code_vars = ctx.attr.code_vars
   command = (
       [
           "set -e;",
           toolchain.jsonnet_path,
       ] +
+      ["-J %s/%s" % (ctx.label.package, im) for im in ctx.attr.imports] +
+      ["-J %s" % im for im in depinfo.imports] +
       toolchain.imports +
-      ctx.attr.imports +
-      list(depinfo.imports) +
-      ["-J ."])
+      ["-J ."] +
+      ["--var '%s'='%s'"
+          % (var, jsonnet_vars[var]) for var in jsonnet_vars.keys()] +
+      ["--code-var '%s'='%s'"
+          % (var, jsonnet_code_vars[var]) for var in jsonnet_code_vars.keys()])
 
   outputs = []
   # If multiple_outputs is set to true, then jsonnet will be invoked with the
@@ -75,14 +81,7 @@ def _jsonnet_to_json_impl(ctx):
     output_json_files = [ctx.new_file(ctx.configuration.bin_dir, out.name)
                          for out in ctx.attr.outs]
     outputs += output_json_files
-    command += ["-m", ctx.file.src.path]
-    # Currently, jsonnet -m creates the output files in the current working
-    # directory. Append mv commands to move the output files into their
-    # correct output directories.
-    # TODO(dzc): Remove this hack when jsonnet supports a flag for setting
-    # an output directory.
-    for json_file in output_json_files:
-      command += ["; mv %s %s" % (json_file.basename, json_file.path)]
+    command += ["-m", output_json_files[0].dirname, ctx.file.src.path]
   else:
     if len(ctx.attr.outs) > 1:
       fail("Only one file can be specified in outs if multiple_outputs is " +
@@ -91,7 +90,7 @@ def _jsonnet_to_json_impl(ctx):
     compiled_json = ctx.new_file(ctx.configuration.bin_dir,
                                  ctx.attr.outs[0].name)
     outputs += [compiled_json]
-    command += [ctx.file.src.path, "> %s" % compiled_json.path]
+    command += [ctx.file.src.path, "-o", compiled_json.path]
 
   compile_inputs = (
       [ctx.file.src, ctx.file._jsonnet, ctx.file._std] +
@@ -104,6 +103,89 @@ def _jsonnet_to_json_impl(ctx):
       command = " ".join(command),
       use_default_shell_env = True,
       progress_message = "Compiling Jsonnet to JSON for " + ctx.label.name);
+
+_EXIT_CODE_COMPARE_COMMAND = """
+EXIT_CODE=$?
+EXPECTED_EXIT_CODE=%d
+if [ $EXIT_CODE -ne $EXPECTED_EXIT_CODE ] ; then
+  echo "FAIL (exit code): %s"
+  echo "Expected: $EXPECTED_EXIT_CODE"
+  echo "Actual: $EXIT_CODE"
+  echo "Output: $OUTPUT"
+  exit 1
+fi
+"""
+
+_DIFF_COMMAND = """
+GOLDEN=$(cat %s)
+if [ "$OUTPUT" != "$GOLDEN" ]; then
+  echo "FAIL (output mismatch): %s"
+  echo "Diff:"
+  diff <(echo $GOLDEN) <(echo $OUTPUT)
+  echo "Expected: $GOLDEN"
+  echo "Actual: $OUTPUT"
+  exit 1
+fi
+"""
+
+_REGEX_DIFF_COMMAND = """
+GOLDEN_REGEX=$(cat %s)
+if [[ ! "$OUTPUT" =~ $GOLDEN_REGEX ]]; then
+  echo "FAIL (regex mismatch): %s"
+  echo "Output: $OUTPUT"
+  exit 1
+fi
+"""
+
+def _jsonnet_to_json_test_impl(ctx):
+  """Implementation of the jsonnet_to_json_test rule."""
+  depinfo = _setup_deps(ctx.attr.deps)
+  toolchain = _jsonnet_toolchain(ctx)
+
+  golden_files = []
+  if ctx.file.golden:
+    golden_files += [ctx.file.golden]
+    if ctx.attr.regex:
+      diff_command = _REGEX_DIFF_COMMAND % (ctx.file.golden.short_path,
+                                           ctx.label.name)
+    else:
+      diff_command = _DIFF_COMMAND % (ctx.file.golden.short_path,
+                                     ctx.label.name)
+
+  jsonnet_vars = ctx.attr.vars
+  jsonnet_code_vars = ctx.attr.code_vars
+  jsonnet_command = " ".join(
+      ["OUTPUT=$(%s" % ctx.file._jsonnet.short_path] +
+      ["-J %s/%s" % (ctx.label.package, im) for im in ctx.attr.imports] +
+      ["-J %s" % im for im in depinfo.imports] +
+      toolchain.imports +
+      ["-J ."] +
+      ["--var %s=%s"
+          % (var, jsonnet_vars[var]) for var in jsonnet_vars.keys()] +
+      ["--code-var %s=%s"
+          % (var, jsonnet_code_vars[var]) for var in jsonnet_code_vars.keys()] +
+      [
+          ctx.file.src.path,
+          "2>&1)",
+      ])
+
+  command = "\n".join([
+      "#!/bin/bash",
+      jsonnet_command,
+      _EXIT_CODE_COMPARE_COMMAND % (ctx.attr.error, ctx.label.name),
+      diff_command])
+
+  ctx.file_action(output = ctx.outputs.executable,
+                  content = command,
+                  executable = True);
+
+  test_inputs = (
+      [ctx.file.src, ctx.file._jsonnet, ctx.file._std] +
+      golden_files +
+      list(depinfo.transitive_sources))
+
+  return struct(
+      runfiles = ctx.runfiles(files = test_inputs, collect_data = True))
 
 _jsonnet_common_attrs = {
     "deps": attr.label_list(providers = ["transitive_jsonnet_files"],
@@ -118,7 +200,7 @@ _jsonnet_common_attrs = {
 }
 
 _jsonnet_library_attrs = {
-    "srcs": attr.label_list(allow_files = JSONNET_FILETYPE),
+    "srcs": attr.label_list(allow_files = _JSONNET_FILETYPE),
 }
 
 jsonnet_library = rule(
@@ -126,9 +208,14 @@ jsonnet_library = rule(
     attrs = _jsonnet_library_attrs + _jsonnet_common_attrs,
 )
 
-_jsonnet_to_json_attrs = {
-    "src": attr.label(allow_files = JSONNET_FILETYPE,
+_jsonnet_compile_attrs = {
+    "src": attr.label(allow_files = _JSONNET_FILETYPE,
                       single_file = True),
+    "vars": attr.string_dict(),
+    "code_vars": attr.string_dict(),
+}
+
+_jsonnet_to_json_attrs = _jsonnet_compile_attrs + {
     "outs": attr.output_list(mandatory = True),
     "multiple_outputs": attr.bool(),
 }
@@ -137,3 +224,23 @@ jsonnet_to_json = rule(
     _jsonnet_to_json_impl,
     attrs = _jsonnet_to_json_attrs + _jsonnet_common_attrs,
 )
+
+_jsonnet_to_json_test_attrs = _jsonnet_compile_attrs + {
+    "golden": attr.label(allow_files = True, single_file = True),
+    "error": attr.int(),
+    "regex": attr.bool(),
+}
+
+jsonnet_to_json_test = rule(
+    _jsonnet_to_json_test_impl,
+    attrs = _jsonnet_to_json_test_attrs + _jsonnet_common_attrs,
+    executable = True,
+    test = True,
+)
+
+def jsonnet_repositories():
+  native.git_repository(
+      name = "jsonnet",
+      remote = "https://github.com/google/jsonnet.git",
+      tag = "v0.8.1",
+  )

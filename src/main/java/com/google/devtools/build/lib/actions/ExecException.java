@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -53,6 +53,12 @@ public abstract class ExecException extends Exception {
 
   public ExecException(String message) {
     this(message, false);
+  }
+  
+  public ExecException(Throwable cause) {
+    super(cause);
+    this.catastrophe = false;
+    this.timedOut = false;
   }
 
   public ExecException(String message, Throwable cause, boolean catastrophe) {

@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,6 +15,9 @@
 package com.google.devtools.build.buildjar.javac.plugins.dependency;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Joiner;
+import com.google.common.base.Splitter;
+import com.google.common.base.Verify;
 import com.google.devtools.build.buildjar.javac.plugins.BlazeJavaCompilerPlugin;
 import com.google.devtools.build.lib.view.proto.Deps;
 import com.google.devtools.build.lib.view.proto.Deps.Dependency.Kind;
@@ -22,13 +25,16 @@ import com.google.devtools.build.lib.view.proto.Deps.Dependency.Kind;
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.BufferedWriter;
+import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -77,6 +83,7 @@ public final class DependencyModule {
   private final Map<String, Deps.Dependency> implicitDependenciesMap;
   Set<String> requiredClasspath;
   private final String fixMessage;
+  private final Set<String> exemptGenerators;
 
   DependencyModule(StrictJavaDeps strictJavaDeps,
                    Map<String, String> directJarsToTargets,
@@ -87,7 +94,8 @@ public final class DependencyModule {
                    String targetLabel,
                    String outputDepsFile,
                    String outputDepsProtoFile,
-                   String fixMessage) {
+                   String fixMessage,
+                   Set<String> exemptGenerators) {
     this.strictJavaDeps = strictJavaDeps;
     this.directJarsToTargets = directJarsToTargets;
     this.indirectJarsToTargets = indirectJarsToTargets;
@@ -101,6 +109,7 @@ public final class DependencyModule {
     this.implicitDependenciesMap = new HashMap<>();
     this.usedClasspath = new HashSet<>();
     this.fixMessage = fixMessage;
+    this.exemptGenerators = exemptGenerators;
   }
 
   /**
@@ -245,21 +254,42 @@ public final class DependencyModule {
   }
 
   /**
+   * Return a set of generator values that are exempt from strict dependencies.
+   */
+  public Set<String> getExemptGenerators() {
+    return exemptGenerators;
+  }
+
+  /**
    * Returns whether classpath reduction is enabled for this invocation.
    */
   public boolean reduceClasspath() {
     return strictClasspathMode;
   }
 
+  private static final Splitter CLASSPATH_SPLITTER = Splitter.on(':');
+  private static final Joiner CLASSPATH_JOINER = Joiner.on(File.pathSeparator);
+
   /**
    * Computes a reduced compile-time classpath from the union of direct dependencies and their
    * dependencies, as listed in the associated .deps artifacts.
    */
-  public String computeStrictClasspath(String originalClasspath, String classDir)
-      throws IOException {
+  public String computeStrictClasspath(String originalClasspath) throws IOException {
     if (!strictClasspathMode) {
       return originalClasspath;
     }
+
+    return CLASSPATH_JOINER.join(
+        computeStrictClasspath(CLASSPATH_SPLITTER.split(originalClasspath)));
+  }
+
+  /**
+   * Computes a reduced compile-time classpath from the union of direct dependencies and their
+   * dependencies, as listed in the associated .deps artifacts.
+   */
+  public List<String> computeStrictClasspath(Iterable<String> originalClasspath)
+      throws IOException {
+    Verify.verify(strictClasspathMode);
 
     // Classpath = direct deps + runtime direct deps + their .deps
     requiredClasspath = new HashSet<>(directJarsToTargets.keySet());
@@ -268,17 +298,14 @@ public final class DependencyModule {
        collectDependenciesFromArtifact(depsArtifact);
     }
 
-    // Filter the initial classpath and keep the original order, with classDir as the last entry.
-    StringBuilder sb = new StringBuilder();
-    String[] originalClasspathEntries = originalClasspath.split(":");
-
-    for (String entry : originalClasspathEntries) {
+    // Filter the initial classpath and keep the original order
+    List<String> filteredClasspath = new ArrayList<>();
+    for (String entry : originalClasspath) {
       if (requiredClasspath.contains(entry)) {
-        sb.append(entry).append(":");
+        filteredClasspath.add(entry);
       }
     }
-    sb.append(classDir);
-    return sb.toString();
+    return filteredClasspath;
   }
 
   @VisibleForTesting
@@ -301,6 +328,8 @@ public final class DependencyModule {
           requiredClasspath.add(dep.getPath());
         }
       }
+    } catch (IOException e) {
+      throw new IOException(String.format("error reading deps artifact: %s", path), e);
     }
   }
 
@@ -320,6 +349,7 @@ public final class DependencyModule {
     private boolean strictClasspathMode = false;
     private String fixMessage = "%s** Please add the following dependencies:%s\n"
         + "  %s to %s\n\n";
+    private final Set<String> exemptGenerators = new HashSet<>();
 
     /**
      * Constructs the DependencyModule, guaranteeing that the maps are
@@ -331,7 +361,7 @@ public final class DependencyModule {
     public DependencyModule build() {
       return new DependencyModule(strictJavaDeps, directJarsToTargets, indirectJarsToTargets,
           strictClasspathMode, depsArtifacts, ruleKind, targetLabel, outputDepsFile,
-          outputDepsProtoFile, fixMessage);
+          outputDepsProtoFile, fixMessage, exemptGenerators);
     }
 
     /**
@@ -461,12 +491,23 @@ public final class DependencyModule {
 
     /**
      * Set the message to display when a missing indirect dependency is found.
-     * 
+     *
      * @param fixMessage the fix message
      * @return this Builder instance
      */
     public Builder setFixMessage(String fixMessage) {
       this.fixMessage = fixMessage;
+      return this;
+    }
+
+    /**
+     * Add a generator to the exempt set.
+     *
+     * @param exemptGenerator the generator class name
+     * @return this Builder instance
+     */
+    public Builder addExemptGenerator(String exemptGenerator) {
+      exemptGenerators.add(exemptGenerator);
       return this;
     }
   }

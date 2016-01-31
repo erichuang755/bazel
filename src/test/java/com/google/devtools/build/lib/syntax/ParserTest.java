@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,9 +20,14 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
+import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.events.Location;
+import com.google.devtools.build.lib.syntax.Argument.Passed;
 import com.google.devtools.build.lib.syntax.DictionaryLiteral.DictionaryEntryLiteral;
+import com.google.devtools.build.lib.syntax.util.EvaluationTestCase;
+import com.google.devtools.build.lib.vfs.PathFragment;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -41,9 +46,7 @@ public class ParserTest extends EvaluationTestCase {
   Environment buildEnvironment;
 
   @Before
-  @Override
-  public void setUp() throws Exception {
-    super.setUp();
+  public final void createBuildEnvironment() throws Exception  {
     buildEnvironment = newBuildEnvironment();
   }
 
@@ -60,9 +63,8 @@ public class ParserTest extends EvaluationTestCase {
   /** Parses a build code (not Skylark) with PythonProcessing enabled */
   private List<Statement> parseFileWithPython(String... input) {
     return Parser.parseFile(
-        buildEnvironment.createLexer(input),
+        ParserInputSource.create(Joiner.on("\n").join(input), null),
         getEventHandler(),
-        Environment.EMPTY_PACKAGE_LOCATOR,
         /*parsePython=*/true).statements;
   }
 
@@ -258,7 +260,7 @@ public class ParserTest extends EvaluationTestCase {
   public void testSubstring() throws Exception {
     FuncallExpression e = (FuncallExpression) parseExpression("'FOO.CC'[:].lower()[1:]");
     assertEquals("$slice", e.getFunction().getName());
-    assertThat(e.getArguments()).hasSize(2);
+    assertThat(e.getArguments()).hasSize(3);
 
     e = (FuncallExpression) parseExpression("'FOO.CC'.lower()[1:].startswith('oo')");
     assertEquals("startswith", e.getFunction().getName());
@@ -266,7 +268,48 @@ public class ParserTest extends EvaluationTestCase {
 
     e = (FuncallExpression) parseExpression("'FOO.CC'[1:][:2]");
     assertEquals("$slice", e.getFunction().getName());
-    assertThat(e.getArguments()).hasSize(2);
+    assertThat(e.getArguments()).hasSize(3);
+  }
+
+  @Test
+  public void testSlice() throws Exception {
+    evalSlice("'0123'[:]", Runtime.NONE, Runtime.NONE, 1);
+    evalSlice("'0123'[1:]", 1, Runtime.NONE, 1);
+    evalSlice("'0123'[:3]", Runtime.NONE, 3, 1);
+    evalSlice("'0123'[::]", Runtime.NONE, Runtime.NONE, 1);
+    evalSlice("'0123'[1::]", 1, Runtime.NONE, 1);
+    evalSlice("'0123'[:3:]", Runtime.NONE, 3, 1);
+    evalSlice("'0123'[::-1]", Runtime.NONE, Runtime.NONE, -1);
+    evalSlice("'0123'[1:3:]", 1, 3, 1);
+    evalSlice("'0123'[1::-1]", 1, Runtime.NONE, -1);
+    evalSlice("'0123'[:3:-1]", Runtime.NONE, 3, -1);
+    evalSlice("'0123'[1:3:-1]", 1, 3, -1);
+  }
+
+  private void evalSlice(String statement, Object... expectedArgs) {
+    FuncallExpression e = (FuncallExpression) parseExpression(statement);
+    assertEquals("$slice", e.getFunction().getName());
+    List<Passed> actualArgs = e.getArguments();
+    assertThat(actualArgs).hasSize(expectedArgs.length);
+    int pos = 0;
+    for (Passed arg : actualArgs) {
+      // There is no way to evaluate the expression here, so we rely on string comparison.
+      String actualString = arg.getValue().toString();
+      String expectedString = printSliceArg(expectedArgs[pos]);
+      assertThat(actualString).isEqualTo(expectedString);
+      ++pos;
+    }
+  }
+
+  private String printSliceArg(Object arg) {
+    // The parser sees negative integer constants as FuncallExpressions instead of negative
+    // IntegerLiterals.
+    // Consequently, the string representation of -1 is "-(1)", not "-1".
+    if (arg instanceof Integer) {
+      int value = (int) arg;
+      return value < 0 ? String.format("-(%d)", -value) : String.valueOf(value);
+    }
+    return arg.toString();
   }
 
   private void assertLocation(int start, int end, Location location)
@@ -287,7 +330,7 @@ public class ParserTest extends EvaluationTestCase {
     String expr = "f(1, [x for foo foo foo foo], 3)";
     FuncallExpression e = (FuncallExpression) parseExpression(expr);
 
-    assertContainsEvent("syntax error at 'foo'");
+    assertContainsError("syntax error at 'foo'");
 
     // Test that the actual parameters are: (1, $error$, 3):
 
@@ -326,8 +369,7 @@ public class ParserTest extends EvaluationTestCase {
     parseExpression("f(1, ), 3)");
     parseExpression("[ ) for v in 3)");
 
-    assertContainsEvent(""); // "" matches any;
-                                          // i.e. there were some events
+    assertContainsError(""); // "" matches any, i.e., there were some events
   }
 
   @Test
@@ -357,23 +399,23 @@ public class ParserTest extends EvaluationTestCase {
   public void testAssignKeyword() {
     setFailFast(false);
     parseExpression("with = 4");
-    assertContainsEvent("keyword 'with' not supported");
-    assertContainsEvent("syntax error at 'with': expected expression");
+    assertContainsError("keyword 'with' not supported");
+    assertContainsError("syntax error at 'with': expected expression");
   }
 
   @Test
   public void testBreak() {
     setFailFast(false);
     parseExpression("break");
-    assertContainsEvent("syntax error at 'break': expected expression");
+    assertContainsError("syntax error at 'break': expected expression");
   }
 
   @Test
   public void testTry() {
     setFailFast(false);
     parseExpression("try: 1 + 1");
-    assertContainsEvent("'try' not supported, all exceptions are fatal");
-    assertContainsEvent("syntax error at 'try': expected expression");
+    assertContainsError("'try' not supported, all exceptions are fatal");
+    assertContainsError("syntax error at 'try': expected expression");
   }
 
   @Test
@@ -397,7 +439,7 @@ public class ParserTest extends EvaluationTestCase {
   public void testInvalidAssign() {
     setFailFast(false);
     parseExpression("1 + (b = c)");
-    assertContainsEvent("syntax error");
+    assertContainsError("syntax error");
     clearEvents();
   }
 
@@ -469,19 +511,23 @@ public class ParserTest extends EvaluationTestCase {
         "def foo():",
         "  for i in [1, 2]:",
         "    break",
-        "    continue");
+        "    continue",
+        "    break");
     assertThat(file).hasSize(1);
     List<Statement> body = ((FunctionDefStatement) file.get(0)).getStatements();
     assertThat(body).hasSize(1);
 
     List<Statement> loop = ((ForStatement) body.get(0)).block();
-    assertThat(loop).hasSize(2);
+    assertThat(loop).hasSize(3);
 
-    assertThat(loop.get(0)).isEqualTo(FlowStatement.BREAK);
+    assertThat(((FlowStatement) loop.get(0)).getKind()).isEqualTo(FlowStatement.Kind.BREAK);
     assertLocation(34, 40, loop.get(0).getLocation());
 
-    assertThat(loop.get(1)).isEqualTo(FlowStatement.CONTINUE);
-    assertLocation(44, 52, loop.get(1).getLocation());
+    assertThat(((FlowStatement) loop.get(1)).getKind()).isEqualTo(FlowStatement.Kind.CONTINUE);
+    assertLocation(44, 53, loop.get(1).getLocation());
+
+    assertThat(((FlowStatement) loop.get(2)).getKind()).isEqualTo(FlowStatement.Kind.BREAK);
+    assertLocation(57, 62, loop.get(2).getLocation());
   }
 
   @Test
@@ -623,23 +669,23 @@ public class ParserTest extends EvaluationTestCase {
     setFailFast(false);
 
     parseExpression("[x for");
-    assertContainsEvent("syntax error at 'newline'");
+    assertContainsError("syntax error at 'newline'");
     clearEvents();
 
     parseExpression("[x for x");
-    assertContainsEvent("syntax error at 'newline'");
+    assertContainsError("syntax error at 'newline'");
     clearEvents();
 
     parseExpression("[x for x in");
-    assertContainsEvent("syntax error at 'newline'");
+    assertContainsError("syntax error at 'newline'");
     clearEvents();
 
     parseExpression("[x for x in []");
-    assertContainsEvent("syntax error at 'newline'");
+    assertContainsError("syntax error at 'newline'");
     clearEvents();
 
     parseExpression("[x for x for y in ['a']]");
-    assertContainsEvent("syntax error at 'for'");
+    assertContainsError("syntax error at 'for'");
     clearEvents();
   }
 
@@ -688,9 +734,9 @@ public class ParserTest extends EvaluationTestCase {
         "");
 
     assertThat(getEventCollector()).hasSize(3);
-    assertContainsEvent("syntax error at 'for': expected newline");
-    assertContainsEvent("syntax error at 'ada': expected newline");
-    assertContainsEvent("syntax error at '+': expected expression");
+    assertContainsError("syntax error at 'for': expected newline");
+    assertContainsError("syntax error at 'ada': expected newline");
+    assertContainsError("syntax error at '+': expected expression");
     assertThat(statements).hasSize(3);
   }
 
@@ -698,7 +744,7 @@ public class ParserTest extends EvaluationTestCase {
   public void testParserContainsErrorsIfSyntaxException() throws Exception {
     setFailFast(false);
     parseExpression("'foo' %%");
-    assertContainsEvent("syntax error at '%'");
+    assertContainsError("syntax error at '%'");
   }
 
   @Test
@@ -710,7 +756,7 @@ public class ParserTest extends EvaluationTestCase {
   public void testParserContainsErrors() throws Exception {
     setFailFast(false);
     parseFile("+");
-    assertContainsEvent("syntax error at '+'");
+    assertContainsError("syntax error at '+'");
   }
 
   @Test
@@ -729,7 +775,7 @@ public class ParserTest extends EvaluationTestCase {
         "foo='foo' error(bar)",
         "",
         "");
-    assertContainsEvent("syntax error at 'error'");
+    assertContainsError("syntax error at 'error'");
     assertThat(stmts).hasSize(1);
   }
 
@@ -829,7 +875,7 @@ public class ParserTest extends EvaluationTestCase {
     // Note: missing comma after name='foo'
     parseFile("genrule(name = 'foo'\n"
               + "      srcs = ['in'])");
-    assertContainsEvent("syntax error at 'srcs'");
+    assertContainsError("syntax error at 'srcs'");
   }
 
   @Test
@@ -837,7 +883,7 @@ public class ParserTest extends EvaluationTestCase {
     setFailFast(false);
     // Regression test.
     parseFile("x = 1; ; x = 2;");
-    assertContainsEvent("syntax error at ';'");
+    assertContainsError("syntax error at ';'");
   }
 
   @Test
@@ -901,7 +947,7 @@ public class ParserTest extends EvaluationTestCase {
         "def foo(x):",
         "x = 2;\n");
     assertThat(stmts).hasSize(2);
-    assertContainsEvent("expected an indented block");
+    assertContainsError("expected an indented block");
   }
 
   @Test
@@ -911,7 +957,7 @@ public class ParserTest extends EvaluationTestCase {
         "x = 1;",
         "def foo(x)",
         "x = 2;\n");
-    assertContainsEvent("syntax error at 'EOF'");
+    assertContainsError("syntax error at 'EOF'");
   }
 
   @Test
@@ -962,7 +1008,7 @@ public class ParserTest extends EvaluationTestCase {
         "  x = 2",
         "x = 3;\n");
     assertThat(stmts).hasSize(2);
-    assertContainsEvent("This is not supported in BUILD files");
+    assertContainsError("This is not supported in BUILD files");
   }
 
   @Test
@@ -976,7 +1022,7 @@ public class ParserTest extends EvaluationTestCase {
     List<Statement> stmts3 = parseFile("[ i for (i, j, k) in [(1, 2, 3)] ]\n");
     assertThat(stmts3).hasSize(1);
   }
-  
+
   @Test
   public void testReturnNone() throws Exception {
     List<Statement> defNone = parseFileForSkylark("def foo():", "  return None\n");
@@ -993,10 +1039,10 @@ public class ParserTest extends EvaluationTestCase {
       List<Statement> defNoExpr = parseFileForSkylark("def bar" + i + "():", "  return" + end);
       i++;
       assertThat(defNoExpr).hasSize(1);
-  
+
       List<Statement> bodyNoExpr = ((FunctionDefStatement) defNoExpr.get(0)).getStatements();
       assertThat(bodyNoExpr).hasSize(1);
-  
+
       ReturnStatement returnNoExpr = (ReturnStatement) bodyNoExpr.get(0);
       Identifier none = (Identifier) returnNoExpr.getReturnExpression();
       assertEquals("None", none.getName());
@@ -1011,54 +1057,180 @@ public class ParserTest extends EvaluationTestCase {
   public void testForLoopBadSyntax() throws Exception {
     setFailFast(false);
     parseFile("[1 for (a, b, c in var]\n");
-    assertContainsEvent("syntax error");
+    assertContainsError("syntax error");
   }
 
   @Test
   public void testForLoopBadSyntax2() throws Exception {
     setFailFast(false);
     parseFile("[1 for in var]\n");
-    assertContainsEvent("syntax error");
+    assertContainsError("syntax error");
   }
 
   @Test
   public void testFunCallBadSyntax() throws Exception {
     setFailFast(false);
     parseFile("f(1,\n");
-    assertContainsEvent("syntax error");
+    assertContainsError("syntax error");
   }
 
   @Test
   public void testFunCallBadSyntax2() throws Exception {
     setFailFast(false);
     parseFile("f(1, 5, ,)\n");
-    assertContainsEvent("syntax error");
+    assertContainsError("syntax error");
   }
 
-  private static final String DOUBLE_SLASH_LOAD = "load('//foo/bar/file', 'test')\n";
-  private static final String DOUBLE_SLASH_ERROR =
-      "First argument of load() is a path, not a label. It should start with a "
-      + "single slash if it is an absolute path.";
-
   @Test
-  public void testLoadDoubleSlashBuild() throws Exception {
+  public void testValidAbsoluteImportPath() {
+    String importString = "/some/skylark/file";
+    List<Statement> statements =
+        parseFileForSkylark("load('" + importString + "', 'fun_test')\n");
+    LoadStatement stmt = (LoadStatement) statements.get(0);
+    SkylarkImport imp = stmt.getImport();
+
+    assertThat(imp.getImportString()).named("getImportString()").isEqualTo("/some/skylark/file");
+    assertThat(imp.hasAbsolutePath()).named("hasAbsolutePath()").isTrue();
+    assertThat(imp.getAbsolutePath()).named("getAbsolutePath()")
+        .isEqualTo(new PathFragment("/some/skylark/file.bzl"));
+
+    int startOffset = stmt.getImportLocation().getStartOffset();
+    int endOffset = stmt.getImportLocation().getEndOffset();
+    assertThat(startOffset).named("getStartOffset()").isEqualTo(5);
+    assertThat(endOffset).named("getEndOffset()")
+        .isEqualTo(startOffset + importString.length() + 2);
+  }
+
+  private void validNonAbsoluteImportTest(String importString, String containingFileLabelString,
+      String expectedLabelString) {
+    List<Statement> statements =
+        parseFileForSkylark("load('" + importString + "', 'fun_test')\n");
+    LoadStatement stmt = (LoadStatement) statements.get(0);
+    SkylarkImport imp = stmt.getImport();
+
+    assertThat(imp.getImportString()).named("getImportString()").isEqualTo(importString);
+    assertThat(imp.hasAbsolutePath()).named("hasAbsolutePath()").isFalse();
+
+    Label containingFileLabel = Label.parseAbsoluteUnchecked(containingFileLabelString);
+    assertThat(imp.getLabel(containingFileLabel)).named("containingFileLabel()")
+        .isEqualTo(Label.parseAbsoluteUnchecked(expectedLabelString)); 
+
+    int startOffset = stmt.getImportLocation().getStartOffset();
+    int endOffset = stmt.getImportLocation().getEndOffset();
+    assertThat(startOffset).named("getStartOffset()").isEqualTo(5);
+    assertThat(endOffset).named("getEndOffset()")
+        .isEqualTo(startOffset + importString.length() + 2);
+  }
+
+  private void invalidImportTest(String importString, String expectedMsg) {
     setFailFast(false);
-    parseFile(DOUBLE_SLASH_LOAD);
-    assertContainsEvent(DOUBLE_SLASH_ERROR);
+    parseFileForSkylark("load('" + importString + "', 'fun_test')\n"); 
+    assertContainsError(expectedMsg);    
   }
 
   @Test
-  public void testLoadDoubleSlashSkylark() throws Exception {
-    setFailFast(false);
-    parseFileForSkylark(DOUBLE_SLASH_LOAD);
-    assertContainsEvent(DOUBLE_SLASH_ERROR);
+  public void testValidRelativeImportPathInPackageDir() throws Exception {
+    validNonAbsoluteImportTest("file", /*containing*/ "//some/skylark:BUILD",
+        /*expected*/ "//some/skylark:file.bzl");
   }
 
   @Test
+  public void testValidRelativeImportPathInPackageSubdir() throws Exception {
+    validNonAbsoluteImportTest("file", /*containing*/ "//some/path/to:skylark/parent.bzl",
+        /*expected*/ "//some/path/to:skylark/file.bzl");
+  }
+
+  @Test
+  public void testInvalidRelativePathBzlExtImplicit() throws Exception {
+    invalidImportTest("file.bzl", SkylarkImports.BZL_EXT_IMPLICIT_MSG);
+  }
+
+  @Test
+  public void testInvalidRelativePathNoSubdirs() throws Exception {
+    invalidImportTest("path/to/file", SkylarkImports.RELATIVE_PATH_NO_SUBDIRS_MSG);
+  }
+
+  @Test
+  public void testInvalidRelativePathInvalidFilename() throws Exception {
+    invalidImportTest("\tfile", SkylarkImports.INVALID_FILENAME_PREFIX);
+  }
+
+  private void validAbsoluteImportLabelTest(String importString) {
+    validNonAbsoluteImportTest(importString, /*irrelevant*/ "//another/path:BUILD",
+        /*expected*/ importString);
+  }
+
+  @Test
+  public void testValidAbsoluteImportLabel() throws Exception {
+    validAbsoluteImportLabelTest("//some/skylark:file.bzl");
+  }
+
+  @Test
+  public void testValidAbsoluteImportLabelWithRepo() throws Exception {
+    validAbsoluteImportLabelTest("@my_repo//some/skylark:file.bzl");
+  }
+
+  @Test
+  public void testInvalidAbsoluteImportLabel() throws Exception {
+    invalidImportTest("//some/skylark/:file.bzl", SkylarkImports.INVALID_LABEL_PREFIX);
+  }
+
+  @Test
+  public void testInvalidAbsoluteImportLabelWithRepo() throws Exception {
+    invalidImportTest("@my_repo//some/skylark/:file.bzl",
+        SkylarkImports.INVALID_LABEL_PREFIX);
+  }
+
+  @Test
+  public void testInvalidAbsoluteImportLabelMissingBzlExt() throws Exception {
+    invalidImportTest("//some/skylark:file", SkylarkImports.MUST_HAVE_BZL_EXT_MSG);
+  }
+
+  @Test
+  public void testInvalidAbsoluteImportReferencesExternalPkg() throws Exception {
+    invalidImportTest("//external:file.bzl", SkylarkImports.EXTERNAL_PKG_NOT_ALLOWED_MSG);
+  }
+
+  @Test
+  public void testValidRelativeImportSimpleLabelInPackageDir() throws Exception {
+    validNonAbsoluteImportTest(":file.bzl", /*containing*/ "//some/skylark:BUILD",
+        /*expected*/ "//some/skylark:file.bzl");
+  }
+
+  @Test
+  public void testValidRelativeImportSimpleLabelInPackageSubdir() throws Exception {
+    validNonAbsoluteImportTest(":file.bzl", /*containing*/ "//some/path/to:skylark/parent.bzl",
+        /*expected*/ "//some/path/to:file.bzl");
+  }
+
+  @Test
+  public void testValidRelativeImportComplexLabelInPackageDir() throws Exception {
+    validNonAbsoluteImportTest(":subdir/containing/file.bzl", /*containing*/ "//some/skylark:BUILD",
+        /*expected*/ "//some/skylark:subdir/containing/file.bzl");
+  }
+
+  @Test
+  public void testValidRelativeImportComplexLabelInPackageSubdir() throws Exception {
+    validNonAbsoluteImportTest(":subdir/containing/file.bzl",
+        /*containing*/ "//some/path/to:skylark/parent.bzl",
+        /*expected*/ "//some/path/to:subdir/containing/file.bzl");
+  }
+
+  @Test
+  public void testInvalidRelativeImportLabelMissingBzlExt() throws Exception {
+    invalidImportTest(":file", SkylarkImports.MUST_HAVE_BZL_EXT_MSG);
+  }
+
+  @Test
+  public void testInvalidRelativeImportLabelSyntax() throws Exception {
+    invalidImportTest("::file.bzl", SkylarkImports.INVALID_TARGET_PREFIX);
+  }
+
+ @Test
   public void testLoadNoSymbol() throws Exception {
     setFailFast(false);
     parseFileForSkylark("load('/foo/bar/file')\n");
-    assertContainsEvent("syntax error");
+    assertContainsError("syntax error");
   }
 
   @Test
@@ -1066,7 +1238,7 @@ public class ParserTest extends EvaluationTestCase {
     List<Statement> statements = parseFileForSkylark(
         "load('/foo/bar/file', 'fun_test')\n");
     LoadStatement stmt = (LoadStatement) statements.get(0);
-    assertEquals("/foo/bar/file.bzl", stmt.getImportPath().toString());
+    assertEquals("/foo/bar/file", stmt.getImport().getImportString());
     assertThat(stmt.getSymbols()).hasSize(1);
   }
 
@@ -1075,7 +1247,7 @@ public class ParserTest extends EvaluationTestCase {
     List<Statement> statements = parseFileForSkylark(
         "load('/foo/bar/file', 'fun_test',)\n");
     LoadStatement stmt = (LoadStatement) statements.get(0);
-    assertEquals("/foo/bar/file.bzl", stmt.getImportPath().toString());
+    assertEquals("/foo/bar/file", stmt.getImport().getImportString());
     assertThat(stmt.getSymbols()).hasSize(1);
   }
 
@@ -1084,7 +1256,7 @@ public class ParserTest extends EvaluationTestCase {
     List<Statement> statements = parseFileForSkylark(
         "load('file', 'foo', 'bar')\n");
     LoadStatement stmt = (LoadStatement) statements.get(0);
-    assertEquals("file.bzl", stmt.getImportPath().toString());
+    assertEquals("file", stmt.getImport().getImportString());
     assertThat(stmt.getSymbols()).hasSize(2);
   }
 
@@ -1092,21 +1264,21 @@ public class ParserTest extends EvaluationTestCase {
   public void testLoadSyntaxError() throws Exception {
     setFailFast(false);
     parseFileForSkylark("load(non_quoted, 'a')\n");
-    assertContainsEvent("syntax error");
+    assertContainsError("syntax error");
   }
 
   @Test
   public void testLoadSyntaxError2() throws Exception {
     setFailFast(false);
     parseFileForSkylark("load('non_quoted', a)\n");
-    assertContainsEvent("syntax error");
+    assertContainsError("syntax error");
   }
 
   @Test
   public void testLoadNotAtTopLevel() throws Exception {
     setFailFast(false);
     parseFileForSkylark("if 1: load(8)\n");
-    assertContainsEvent("function 'load' does not exist");
+    assertContainsError("function 'load' does not exist");
   }
 
   @Test
@@ -1141,48 +1313,48 @@ public class ParserTest extends EvaluationTestCase {
   public void testLoadAliasSyntaxError() throws Exception {
     setFailFast(false);
     parseFileForSkylark("load('/foo', test1 = )\n");
-    assertContainsEvent("syntax error at ')': expected string");
+    assertContainsError("syntax error at ')': expected string");
 
     parseFileForSkylark("load('/foo', test2 = 1)\n");
-    assertContainsEvent("syntax error at '1': expected string");
+    assertContainsError("syntax error at '1': expected string");
 
     parseFileForSkylark("load('/foo', test3 = old)\n");
-    assertContainsEvent("syntax error at 'old': expected string");
+    assertContainsError("syntax error at 'old': expected string");
   }
-  
+
   @Test
   public void testParseErrorNotComparison() throws Exception {
     setFailFast(false);
     parseFile("2 < not 3");
-    assertContainsEvent("syntax error at 'not'");
+    assertContainsError("syntax error at 'not'");
   }
 
   @Test
   public void testNotWithArithmeticOperatorsBadSyntax() throws Exception {
     setFailFast(false);
     parseFile("0 + not 0");
-    assertContainsEvent("syntax error at 'not'");
+    assertContainsError("syntax error at 'not'");
   }
 
   @Test
   public void testKwargsForbidden() throws Exception {
     setFailFast(false);
     parseFile("func(**dict)");
-    assertContainsEvent("**kwargs arguments are not allowed in BUILD files");
+    assertContainsError("**kwargs arguments are not allowed in BUILD files");
   }
 
   @Test
   public void testArgsForbidden() throws Exception {
     setFailFast(false);
     parseFile("func(*array)");
-    assertContainsEvent("*args arguments are not allowed in BUILD files");
+    assertContainsError("*args arguments are not allowed in BUILD files");
   }
 
   @Test
   public void testOptionalArgBeforeMandatoryArgInFuncDef() throws Exception {
     setFailFast(false);
     parseFileForSkylark("def func(a, b = 'a', c):\n  return 0\n");
-    assertContainsEvent(
+    assertContainsError(
         "a mandatory positional parameter must not follow an optional parameter");
   }
 
@@ -1192,7 +1364,7 @@ public class ParserTest extends EvaluationTestCase {
     parseFileForSkylark(
         "def func(a, b): return a + b",
         "func(**{'b': 1}, 'a')");
-    assertContainsEvent("unexpected tokens after kwarg");
+    assertContainsError("unexpected tokens after kwarg");
   }
 
   @Test
@@ -1201,7 +1373,7 @@ public class ParserTest extends EvaluationTestCase {
     parseFileForSkylark(
         "def func(a, b): return a + b",
         "func(**{'b': 1}, **{'a': 2})");
-    assertContainsEvent("unexpected tokens after kwarg");
+    assertContainsError("unexpected tokens after kwarg");
   }
 
   @Test
@@ -1227,7 +1399,7 @@ public class ParserTest extends EvaluationTestCase {
   public void testTopLevelForFails() throws Exception {
     setFailFast(false);
     parseFileForSkylark("for i in []: 0\n");
-    assertContainsEvent(
+    assertContainsError(
         "for loops are not allowed on top-level. Put it into a function");
   }
 
@@ -1239,7 +1411,7 @@ public class ParserTest extends EvaluationTestCase {
           "  def bar(): return 0",
           "  return bar()",
           "");
-    assertContainsEvent(
+    assertContainsError(
         "nested functions are not allowed. Move the function to top-level");
   }
 
@@ -1250,20 +1422,42 @@ public class ParserTest extends EvaluationTestCase {
         "def func(a):",
         // no if
         "  else: return a");
-    assertContainsEvent("syntax error at 'else'");
+    assertContainsError("syntax error at 'else'");
   }
 
   @Test
-  public void testIncludeFailureSkylark() throws Exception {
+  public void testTryStatementInBuild() throws Exception {
     setFailFast(false);
-    parseFileForSkylark("include('//foo:bar')");
-    assertContainsEvent("function 'include' does not exist");
+    parseFile("try: pass");
+    assertContainsError("syntax error at 'try': Try statements are not supported.");
   }
 
   @Test
-  public void testIncludeFailure() throws Exception {
+  public void testTryStatementInSkylark() throws Exception {
     setFailFast(false);
-    parseFile("include('nonexistent')\n");
-    assertContainsEvent("Invalid label 'nonexistent'");
+    parseFileForSkylark("try: pass");
+    assertContainsError("syntax error at 'try': Try statements are not supported.");
+  }
+
+  @Test
+  public void testClassDefinitionInBuild() throws Exception {
+    setFailFast(false);
+    parseFile("class test(object): pass");
+    assertContainsError("syntax error at 'class': Class definitions are not supported.");
+  }
+
+  @Test
+  public void testClassDefinitionInSkylark() throws Exception {
+    setFailFast(false);
+    parseFileForSkylark("class test(object): pass");
+    assertContainsError("syntax error at 'class': Class definitions are not supported.");
+  }
+
+  @Test
+  public void testDefInBuild() throws Exception {
+    setFailFast(false);
+    parseFile("def func(): pass");
+    assertContainsError("syntax error at 'def': This is not supported in BUILD files. "
+        + "Move the block to a .bzl file and load it");
   }
 }

@@ -1,4 +1,4 @@
-# Copyright 2015 Google Inc. All rights reserved.
+# Copyright 2015 The Bazel Authors. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,20 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-objc_binary(
+ios_application(
     name = "PrenotCalculator",
-    srcs = [
-        "PrenotCalculator/main.m",
-    ],
+    binary = ":PrenotCalculator_binary",
     infoplist = "PrenotCalculator/PrenotCalculator-Info.plist",
     visibility = ["//visibility:public"],
-    deps = [
-        ":PrenotCalculatorClasses",
-    ],
 )
 
-objc_library(
-    name = "PrenotCalculatorClasses",
+objc_binary(
+    name = "PrenotCalculator_binary",
     srcs = [
         "PrenotCalculator/AppDelegate.m",
         "PrenotCalculator/CalculatedValues.m",
@@ -34,6 +29,7 @@ objc_library(
         "PrenotCalculator/Equation.m",
         "PrenotCalculator/Literal.m",
         "PrenotCalculator/ValuesViewController.m",
+        "PrenotCalculator/main.m",
     ],
     hdrs = glob(
         ["**/*.h"],

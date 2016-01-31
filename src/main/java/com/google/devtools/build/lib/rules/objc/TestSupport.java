@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,7 +16,6 @@ package com.google.devtools.build.lib.rules.objc;
 
 import com.google.common.base.Joiner;
 import com.google.common.base.Optional;
-import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
@@ -32,11 +31,13 @@ import com.google.devtools.build.lib.analysis.actions.TemplateExpansionAction;
 import com.google.devtools.build.lib.analysis.actions.TemplateExpansionAction.Substitution;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
-import com.google.devtools.build.lib.packages.Type;
-import com.google.devtools.build.lib.rules.objc.ObjcProvider.Key;
-import com.google.devtools.build.lib.rules.test.InstrumentedFilesProvider;
-import com.google.devtools.build.lib.rules.test.InstrumentedFilesProviderImpl;
+import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
+import com.google.devtools.build.lib.rules.apple.AppleToolchain;
+import com.google.devtools.build.lib.rules.apple.XcodeConfigProvider;
+import com.google.devtools.build.lib.rules.test.TestEnvironmentProvider;
+import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.util.FileType;
+import com.google.devtools.build.lib.util.Preconditions;
 
 import java.util.List;
 import java.util.Map;
@@ -73,12 +74,22 @@ public class TestSupport {
     // testIpa is the app actually containing the tests
     Artifact testIpa = testIpa();
 
-    // The substitutions below are common for simulator and lab device.
-    ImmutableList.Builder<Substitution> substitutions = new ImmutableList.Builder<Substitution>()
-        .add(Substitution.of("%(test_app_ipa)s", testIpa.getRootRelativePathString()))
-        .add(Substitution.of("%(test_app_name)s", baseNameWithoutIpa(testIpa)))
-        .add(Substitution.of("%(plugin_jars)s", Artifact.joinRootRelativePaths(":", plugins())));
+    String runMemleaks =
+        ruleContext.getFragment(ObjcConfiguration.class).runMemleaks() ? "true" : "false";
 
+    Map<String, String> testEnv = ruleContext.getConfiguration().getTestEnv();
+    
+    // The substitutions below are common for simulator and lab device.
+    ImmutableList.Builder<Substitution> substitutions =
+        new ImmutableList.Builder<Substitution>()
+            .add(Substitution.of("%(memleaks)s", runMemleaks))
+            .add(Substitution.of("%(test_app_ipa)s", testIpa.getRootRelativePathString()))
+            .add(Substitution.of("%(test_app_name)s", baseNameWithoutIpa(testIpa)))
+            .add(
+                Substitution.of("%(plugin_jars)s", Artifact.joinRootRelativePaths(":", plugins())));
+    
+    substitutions.add(Substitution.ofSpaceSeparatedMap("%(test_env)s", testEnv));
+        
     // xctestIpa is the app bundle being tested
     Optional<Artifact> xctestIpa = xctestIpa();
     if (xctestIpa.isPresent()) {
@@ -197,12 +208,8 @@ public class TestSupport {
 
   /**
    * Adds all files needed to run this test to the passed Runfiles builder.
-   *
-   * @param objcProvider common information about this rule's attributes and its dependencies
-   * @throws InterruptedException 
    */
-  public TestSupport addRunfiles(Builder runfilesBuilder, ObjcProvider objcProvider)
-      throws InterruptedException {
+  public TestSupport addRunfiles(Builder runfilesBuilder) throws InterruptedException {
     runfilesBuilder
         .addArtifact(testIpa())
         .addArtifacts(xctestIpa().asSet())
@@ -218,74 +225,44 @@ public class TestSupport {
       runfilesBuilder.addTransitiveArtifacts(labDeviceRunfiles());
     }
 
-    if (ruleContext.getConfiguration().isCodeCoverageEnabled()) {
-      runfilesBuilder
-          .addTransitiveArtifacts(objcProvider.get(ObjcProvider.SOURCE))
-          .addTransitiveArtifacts(gcnoFiles(objcProvider));
-    }
     return this;
   }
 
   /**
    * Returns any additional providers that need to be exported to the rule context to the passed
    * builder.
-   *
-   * @param objcProvider common information about this rule's attributes and its dependencies
    */
-  public Map<Class<? extends TransitiveInfoProvider>, TransitiveInfoProvider>
-      getExtraProviders(ObjcProvider objcProvider) {
-    return ImmutableMap.<Class<? extends TransitiveInfoProvider>, TransitiveInfoProvider>of(
-        InstrumentedFilesProvider.class,
-        new InstrumentedFilesProviderImpl(
-            instrumentedFiles(objcProvider), gcnoFiles(objcProvider), gcovEnv()));
-  }
+  public Map<Class<? extends TransitiveInfoProvider>, TransitiveInfoProvider> getExtraProviders() {
+    AppleConfiguration configuration = ruleContext.getFragment(AppleConfiguration.class);
+    XcodeConfigProvider xcodeConfigProvider =
+        ruleContext.getPrerequisite(":xcode_config", Mode.HOST, XcodeConfigProvider.class);
 
-  /**
-   * Returns a map of extra environment variable names to their values used to point to gcov binary,
-   * which should be added to the test action environment, if coverage is enabled.
-   */
-  private Map<String, String> gcovEnv() {
+    ImmutableMap.Builder<String, String> envBuilder = ImmutableMap.builder();
+
+    envBuilder.putAll(configuration.getEnvironmentForIosAction());
+    envBuilder.putAll(AppleToolchain.appleHostSystemEnv(xcodeConfigProvider));
+
     if (ruleContext.getConfiguration().isCodeCoverageEnabled()) {
-      return ImmutableMap.of("COVERAGE_GCOV_PATH",
+      envBuilder.put("COVERAGE_GCOV_PATH",
           ruleContext.getHostPrerequisiteArtifact(":gcov").getExecPathString());
     }
-    return ImmutableMap.of();
-  }
 
-  /**
-   * Returns all GCC coverage notes files available for computing coverage.
-   */
-  private NestedSet<Artifact> gcnoFiles(ObjcProvider objcProvider) {
-    return filesWithXcTestApp(ObjcProvider.GCNO, objcProvider);
-  }
-
-  /**
-   * Returns all source files from the test (and if present xctest app) which have been
-   * instrumented for code coverage.
-   */
-  private NestedSet<Artifact> instrumentedFiles(ObjcProvider objcProvider) {
-    return filesWithXcTestApp(ObjcProvider.INSTRUMENTED_SOURCE, objcProvider);
-  }
-
-  private NestedSet<Artifact> filesWithXcTestApp(Key<Artifact> key, ObjcProvider objcProvider) {
-    NestedSet<Artifact> underlying = objcProvider.get(key);
-    XcTestAppProvider provider = ruleContext.getPrerequisite(
-        IosTest.XCTEST_APP, Mode.TARGET, XcTestAppProvider.class);
-    if (provider == null) {
-      return underlying;
-    }
-
-    return NestedSetBuilder.<Artifact>stableOrder()
-        .addTransitive(underlying)
-        .addTransitive(provider.getObjcProvider().get(key))
-        .build();
+    return ImmutableMap.<Class<? extends TransitiveInfoProvider>, TransitiveInfoProvider>of(
+        TestEnvironmentProvider.class, new TestEnvironmentProvider(envBuilder.build()));
   }
 
   /**
    * Jar files for plugins to the test runner. May be empty.
    */
   private NestedSet<Artifact> plugins() {
-    return PrerequisiteArtifacts.nestedSet(ruleContext, "plugins", Mode.TARGET);
+    NestedSetBuilder<Artifact> pluginArtifacts = NestedSetBuilder.stableOrder();
+    pluginArtifacts.addTransitive(
+        PrerequisiteArtifacts.nestedSet(ruleContext, "plugins", Mode.TARGET));
+    if (ruleContext.getFragment(ObjcConfiguration.class).runMemleaks()) {
+      pluginArtifacts.addTransitive(
+          PrerequisiteArtifacts.nestedSet(ruleContext, IosTest.MEMLEAKS_PLUGIN, Mode.TARGET));
+    }
+    return pluginArtifacts.build();
   }
 
   /**
@@ -307,7 +284,6 @@ public class TestSupport {
 
   /**
    * Adds files which must be built in order to run this test to builder.
-   * @throws InterruptedException 
    */
   public TestSupport addFilesToBuild(NestedSetBuilder<Artifact> builder)
       throws InterruptedException {

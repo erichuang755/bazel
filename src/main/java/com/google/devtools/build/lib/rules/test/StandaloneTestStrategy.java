@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,9 @@
 
 package com.google.devtools.build.lib.rules.test;
 
+import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
+import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.BaseSpawn;
 import com.google.devtools.build.lib.actions.EnvironmentalExecException;
 import com.google.devtools.build.lib.actions.ExecException;
@@ -53,14 +55,14 @@ public class StandaloneTestStrategy extends TestStrategy {
 
   private final Path workspace;
 
-  public StandaloneTestStrategy(OptionsClassProvider requestOptions,
-      OptionsClassProvider startupOptions, BinTools binTools, Map<String, String> clientEnv,
+  public StandaloneTestStrategy(
+      OptionsClassProvider requestOptions,
+      BinTools binTools,
+      Map<String, String> clientEnv,
       Path workspace) {
-    super(requestOptions, startupOptions, binTools, clientEnv);
+    super(requestOptions, binTools, clientEnv);
     this.workspace = workspace;
   }
-
-  private static final String TEST_SETUP = "tools/test/test-setup.sh";
 
   @Override
   public void exec(TestRunnerAction action, ActionExecutionContext actionExecutionContext)
@@ -78,8 +80,8 @@ public class StandaloneTestStrategy extends TestStrategy {
         .getChild(getTmpDirName(action.getExecutionSettings().getExecutable().getExecPath()));
     Path workingDirectory = runfilesDir.getRelative(action.getRunfilesPrefix());
 
-    TestRunnerAction.ResolvedPaths resolvedPaths =
-        action.resolve(actionExecutionContext.getExecutor().getExecRoot());
+    Path execRoot = actionExecutionContext.getExecutor().getExecRoot();
+    TestRunnerAction.ResolvedPaths resolvedPaths = action.resolve(execRoot);
     Map<String, String> env = getEnv(action, runfilesDir, testTmpDir, resolvedPaths);
 
     Map<String, String> info = new HashMap<>();
@@ -88,19 +90,19 @@ public class StandaloneTestStrategy extends TestStrategy {
     info.put("timeout", "" + getTimeout(action));
     info.putAll(action.getTestProperties().getExecutionInfo());
 
+    Artifact testSetup = action.getRuntimeArtifact(TEST_SETUP_BASENAME);
     Spawn spawn =
         new BaseSpawn(
             // Bazel lacks much of the tooling for coverage, so we don't attempt to pass a coverage
             // script here.
-            getArgs(TEST_SETUP, "", action),
+            getArgs(testSetup.getExecPathString(), "", action),
             env,
             info,
             new RunfilesSupplierImpl(
                 runfilesDir.asFragment(), action.getExecutionSettings().getRunfiles()),
             action,
-            action
-                .getTestProperties()
-                .getLocalResourceUsage(executionOptions.usingLocalTestJobs()));
+            action.getTestProperties().getLocalResourceUsage(executionOptions.usingLocalTestJobs()),
+            ImmutableSet.of(resolvedPaths.getXmlOutputPath().relativeTo(execRoot)));
 
     Executor executor = actionExecutionContext.getExecutor();
 
@@ -153,7 +155,7 @@ public class StandaloneTestStrategy extends TestStrategy {
     Map<String, String> vars = getDefaultTestEnvironment(action);
     BuildConfiguration config = action.getConfiguration();
 
-    vars.putAll(config.getDefaultShellEnvironment());
+    vars.putAll(config.getLocalShellEnvironment());
     vars.putAll(action.getTestEnv());
 
     /*
@@ -176,6 +178,7 @@ public class StandaloneTestStrategy extends TestStrategy {
     Path testLogPath = action.getTestLog().getPath();
     TestResultData.Builder builder = TestResultData.newBuilder();
 
+    long startTime = executor.getClock().currentTimeMillis();
     try {
       try {
         if (executionOptions.testOutput.equals(TestOutputFormat.STREAMED)) {
@@ -187,7 +190,8 @@ public class StandaloneTestStrategy extends TestStrategy {
 
         builder.setTestPassed(true)
             .setStatus(BlazeTestStatus.PASSED)
-            .setCachable(true);
+            .setCachable(true)
+            .setPassedLog(testLogPath.getPathString());
       } catch (ExecException e) {
         // Execution failed, which we consider a test failure.
 
@@ -195,8 +199,12 @@ public class StandaloneTestStrategy extends TestStrategy {
         // timeout, etc.)
         builder
             .setTestPassed(false)
-            .setStatus(e.hasTimedOut() ? BlazeTestStatus.TIMEOUT : BlazeTestStatus.FAILED);
+            .setStatus(e.hasTimedOut() ? BlazeTestStatus.TIMEOUT : BlazeTestStatus.FAILED)
+            .addFailedLogs(testLogPath.getPathString());
       } finally {
+        long duration = executor.getClock().currentTimeMillis() - startTime;
+        builder.addTestTimes(duration);
+        builder.setRunDurationMillis(duration);
         if (streamed != null) {
           streamed.close();
         }

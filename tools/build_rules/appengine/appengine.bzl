@@ -1,4 +1,4 @@
-# Copyright 2015 Google Inc. All rights reserved.
+# Copyright 2015 The Bazel Authors. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -182,39 +182,49 @@ def _war_impl(ctxt):
 
 appengine_war = rule(
     _war_impl,
-    executable = True,
     attrs = {
         "_java": attr.label(
-            default=Label("//tools/jdk:java"),
-            single_file=True),
+            default = Label("@bazel_tools//tools/jdk:java"),
+            single_file = True,
+        ),
         "_zipper": attr.label(
-            default=Label("//third_party/ijar:zipper"),
-            single_file=True),
+            default = Label("@bazel_tools//third_party/ijar:zipper"),
+            single_file = True,
+        ),
         "_runner_template": attr.label(
-            default=Label("//tools/build_rules/appengine:runner_template"),
-            single_file=True),
+            default = Label("@bazel_tools//tools/build_rules/appengine:runner_template"),
+            single_file = True,
+        ),
         "_deploy_template": attr.label(
-            default=Label("//tools/build_rules/appengine:deploy_template"),
-            single_file=True),
+            default = Label("@bazel_tools//tools/build_rules/appengine:deploy_template"),
+            single_file = True,
+        ),
         "_appengine_sdk": attr.label(
-            default=Label("//external:appengine/java/sdk")),
+            default = Label("//external:appengine/java/sdk"),
+        ),
         "_appengine_jars": attr.label(
-            default=Label("//external:appengine/java/jars")),
+            default = Label("//external:appengine/java/jars"),
+        ),
         "_appengine_deps": attr.label_list(
-            default=[
-                Label("@appengine-java//:api"),
-                Label("@commons-lang//jar"),
-                Label("//third_party:apache_commons_collections"),
-                ]
-            ),
-        "jars": attr.label_list(allow_files=jar_filetype, mandatory=True),
-        "data": attr.label_list(allow_files=True),
+            default = [
+                Label("@com_google_appengine_java//:api"),
+                Label("@org_apache_commons_lang//jar"),
+                Label("@org_apache_commons_collections//jar"),
+            ],
+        ),
+        "jars": attr.label_list(
+            allow_files = jar_filetype,
+            mandatory = True,
+        ),
+        "data": attr.label_list(allow_files = True),
         "data_path": attr.string(),
     },
+    executable = True,
     outputs = {
         "war": "%{name}.war",
         "deploy": "%{name}.deploy",
-    })
+    },
+)
 
 def java_war(name, data=[], data_path=None, **kwargs):
   native.java_library(name = "lib%s" % name, **kwargs)
@@ -222,3 +232,46 @@ def java_war(name, data=[], data_path=None, **kwargs):
                 jars = ["lib%s" % name],
                 data=data,
                 data_path=data_path)
+
+def appengine_repositories():
+  native.new_http_archive(
+      name = "com_google_appengine_java",
+      url = "http://central.maven.org/maven2/com/google/appengine/appengine-java-sdk/1.9.23/appengine-java-sdk-1.9.23.zip",
+      sha256 = "05e667036e9ef4f999b829fc08f8e5395b33a5a3c30afa9919213088db2b2e89",
+      build_file = "tools/build_rules/appengine/appengine.BUILD",
+  )
+
+  native.bind(
+      name = "appengine/java/sdk",
+      actual = "@com_google_appengine_java//:sdk",
+  )
+
+  native.bind(
+      name = "appengine/java/api",
+      actual = "@com_google_appengine_java//:api",
+  )
+
+  native.bind(
+      name = "appengine/java/jars",
+      actual = "@com_google_appengine_java//:jars",
+  )
+
+  native.maven_jar(
+      name = "javax_servlet_api",
+      artifact = "javax.servlet:servlet-api:2.5",
+  )
+
+  native.bind(
+      name = "javax/servlet/api",
+      actual = "@bazel_tools//tools/build_rules/appengine:javax.servlet.api",
+  )
+
+  native.maven_jar(
+      name = "org_apache_commons_lang",
+      artifact = "commons-lang:commons-lang:2.6",
+  )
+
+  native.maven_jar(
+      name = "org_apache_commons_collections",
+      artifact = "commons-collections:commons-collections:3.2.1",
+  )

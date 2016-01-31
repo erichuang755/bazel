@@ -1,4 +1,4 @@
-// Copyright 2015 Google Inc. All rights reserved.
+// Copyright 2015 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,8 +13,7 @@
 // limitations under the License.
 package com.google.devtools.build.lib.skyframe;
 
-import com.google.common.base.Optional;
-import com.google.common.base.Preconditions;
+import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.util.io.TimestampGranularityMonitor;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
@@ -27,36 +26,25 @@ import javax.annotation.Nullable;
  */
 public abstract class SkyValueDirtinessChecker {
 
-  /**
-   * Returns
-   * <ul>
-   *   <li>{@code null}, if the checker can't handle {@code key}.
-   *   <li>{@code Optional.<SkyValue>absent()} if the checker can handle {@code key} but was unable
-   *       to create a new value.
-   *   <li>{@code Optional.<SkyValue>of(v)} if the checker can handle {@code key} and the new value
-   *       should be {@code v}.
-   * </ul>
-   */
-  @Nullable
-  public abstract Optional<SkyValue> maybeCreateNewValue(SkyKey key,
-      TimestampGranularityMonitor tsgm);
+  /** Returns {@code true} iff the checker can handle {@code key}. */
+  public abstract boolean applies(SkyKey key);
 
   /**
-   * Returns the result of checking whether this key's value is up to date, or null if this
-   * dirtiness checker does not apply to this key. If non-null, this answer is assumed to be
-   * definitive.
+   * If {@code applies(key)}, returns the new value for {@code key} or {@code null} if the checker
+   * was unable to create a new value.
    */
   @Nullable
-  public DirtyResult maybeCheck(SkyKey key, @Nullable SkyValue oldValue,
-      TimestampGranularityMonitor tsgm) {
-    Optional<SkyValue> newValueMaybe = maybeCreateNewValue(key, tsgm);
-    if (newValueMaybe == null) {
-      return null;
-    }
-    if (!newValueMaybe.isPresent()) {
+  public abstract SkyValue createNewValue(SkyKey key, @Nullable TimestampGranularityMonitor tsgm);
+
+  /**
+   * If {@code applies(key)}, returns the result of checking whether this key's value is up to date.
+   */
+  public DirtyResult check(SkyKey key, @Nullable SkyValue oldValue,
+      @Nullable TimestampGranularityMonitor tsgm) {
+    SkyValue newValue = createNewValue(key, tsgm);
+    if (newValue == null) {
       return DirtyResult.dirty(oldValue);
     }
-    SkyValue newValue = Preconditions.checkNotNull(newValueMaybe.get(), key);
     return newValue.equals(oldValue)
         ? DirtyResult.notDirty(oldValue)
         : DirtyResult.dirtyWithNewValue(oldValue, newValue);

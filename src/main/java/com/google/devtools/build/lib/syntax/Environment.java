@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,21 +16,17 @@ package com.google.devtools.build.lib.syntax;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Joiner;
-import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.events.EventKind;
 import com.google.devtools.build.lib.events.Location;
-import com.google.devtools.build.lib.packages.CachingPackageLocator;
 import com.google.devtools.build.lib.syntax.Mutability.Freezable;
 import com.google.devtools.build.lib.syntax.Mutability.MutabilityException;
 import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.util.Pair;
-import com.google.devtools.build.lib.vfs.Path;
-import com.google.devtools.build.lib.vfs.PathFragment;
+import com.google.devtools.build.lib.util.Preconditions;
 
 import java.io.Serializable;
 import java.util.HashMap;
@@ -161,14 +157,7 @@ public final class Environment implements Freezable {
 
     @Override
     public String toString() {
-      String prefix = "Frame";
-      StringBuilder sb = new StringBuilder();
-      for (Frame f = this; f != null; f = f.parent) {
-        Printer.formatTo(sb, "%s%s%r",
-            ImmutableList.<Object>of(prefix, f.mutability(), f.bindings));
-        prefix = "=>";
-      }
-      return sb.toString();
+      return String.format("<Frame%s>", mutability());
     }
   }
 
@@ -230,6 +219,11 @@ public final class Environment implements Freezable {
     BaseExtension(Environment env) {
       this.bindings = ImmutableMap.copyOf(env.globalFrame.bindings);
     }
+
+    // Hack to allow serialization.
+    BaseExtension() {
+      this.bindings = ImmutableMap.of();
+    }
   }
 
   /**
@@ -247,6 +241,12 @@ public final class Environment implements Freezable {
     public Extension(Environment env) {
       super(env);
       this.transitiveContentHashCode = env.getTransitiveContentHashCode();
+    }
+
+    // Hack to allow serialization.
+    private Extension() {
+      super();
+      this.transitiveContentHashCode = null;
     }
 
     @VisibleForTesting // This is only used in one test.
@@ -293,9 +293,9 @@ public final class Environment implements Freezable {
   private final EventHandler eventHandler;
 
   /**
-   * For each imported extensions, a global Skylark frame from which to load() individual bindings.
+   * For each imported extension, a global Skylark frame from which to load() individual bindings.
    */
-  private final Map<PathFragment, Extension> importedExtensions;
+  private final Map<String, Extension> importedExtensions;
 
   /**
    * Is this Environment being executed in Skylark context?
@@ -385,28 +385,6 @@ public final class Environment implements Freezable {
     return lexicalFrame == null;
   }
 
-  /**
-   * Is the current code Skylark?
-   * @return true if Skylark was enabled when this code was read.
-   */
-  // TODO(bazel-team): Delete this function.
-  // This function is currently used in various functions that change their behavior with respect to
-  // lists depending on the Skylark-ness of the code; lists should be unified between the two modes.
-  boolean isSkylark() {
-    return isSkylark;
-  }
-
-  /**
-   * Is the caller of the current function executing Skylark code?
-   * @return true if this is skylark was enabled when this code was read.
-   */
-  // TODO(bazel-team): Delete this function.
-  // This function is currently used by MethodLibrary to modify behavior of lists
-  // depending on the Skylark-ness of the code; lists should be unified between the two modes.
-  boolean isCallerSkylark() {
-    return continuation.isSkylark;
-  }
-
   @Override
   public Mutability mutability() {
     // the mutability of the environment is that of its dynamic frame.
@@ -477,7 +455,7 @@ public final class Environment implements Freezable {
       Frame globalFrame,
       Frame dynamicFrame,
       EventHandler eventHandler,
-      Map<PathFragment, Extension> importedExtensions,
+      Map<String, Extension> importedExtensions,
       boolean isSkylark,
       @Nullable String fileContentHashCode,
       boolean isLoadingPhase) {
@@ -501,7 +479,7 @@ public final class Environment implements Freezable {
     private boolean isLoadingPhase = false;
     @Nullable private Frame parent;
     @Nullable private EventHandler eventHandler;
-    @Nullable private Map<PathFragment, Extension> importedExtensions;
+    @Nullable private Map<String, Extension> importedExtensions;
     @Nullable private String fileContentHashCode;
 
     Builder(Mutability mutability) {
@@ -537,9 +515,9 @@ public final class Environment implements Freezable {
     }
 
     /** Declares imported extensions for load() statements. */
-    public Builder setImportedExtensions (Map<PathFragment, Extension> importedExtensions) {
+    public Builder setImportedExtensions (Map<String, Extension> importMap) {
       Preconditions.checkState(this.importedExtensions == null);
-      this.importedExtensions = importedExtensions;
+      this.importedExtensions = importMap;
       return this;
     }
 
@@ -560,7 +538,7 @@ public final class Environment implements Freezable {
       if (importedExtensions == null) {
         importedExtensions = ImmutableMap.of();
       }
-      Environment env = new Environment(
+      return new Environment(
           globalFrame,
           dynamicFrame,
           eventHandler,
@@ -568,7 +546,6 @@ public final class Environment implements Freezable {
           isSkylark,
           fileContentHashCode,
           isLoadingPhase);
-      return env;
     }
   }
 
@@ -764,25 +741,7 @@ public final class Environment implements Freezable {
 
   @Override
   public String toString() {
-    StringBuilder out = new StringBuilder();
-    out.append("Environment(lexicalFrame=");
-    out.append(lexicalFrame);
-    out.append(", globalFrame=");
-    out.append(globalFrame);
-    out.append(", dynamicFrame=");
-    out.append(dynamicFrame);
-    out.append(", eventHandler.getClass()=");
-    out.append(eventHandler.getClass());
-    out.append(", importedExtensions=");
-    out.append(importedExtensions);
-    out.append(", isSkylark=");
-    out.append(isSkylark);
-    out.append(", fileContentHashCode=");
-    out.append(fileContentHashCode);
-    out.append(", isLoadingPhase=");
-    out.append(isLoadingPhase);
-    out.append(")");
-    return out.toString();
+    return String.format("<Environment%s>", mutability());
   }
 
   /**
@@ -800,22 +759,22 @@ public final class Environment implements Freezable {
    * that was not properly loaded.
    */
   public static class LoadFailedException extends Exception {
-    LoadFailedException(PathFragment extension) {
+    LoadFailedException(String importString) {
       super(String.format("file '%s' was not correctly loaded. "
               + "Make sure the 'load' statement appears in the global scope in your file",
-              extension));
+              importString));
     }
   }
 
-  public void importSymbol(PathFragment extension, Identifier symbol, String nameInLoadedFile)
+  public void importSymbol(String importString, Identifier symbol, String nameInLoadedFile)
       throws NoSuchVariableException, LoadFailedException {
     Preconditions.checkState(isGlobal()); // loading is only allowed at global scope.
 
-    if (!importedExtensions.containsKey(extension)) {
-      throw new LoadFailedException(extension);
+    if (!importedExtensions.containsKey(importString)) {
+      throw new LoadFailedException(importString);
     }
 
-    Extension ext = importedExtensions.get(extension);
+    Extension ext = importedExtensions.get(importString);
 
     // TODO(bazel-team): Throw a LoadFailedException instead, with an appropriate message.
     // Throwing a NoSuchVariableException is backward compatible, but backward.
@@ -824,16 +783,11 @@ public final class Environment implements Freezable {
     }
 
     Object value = ext.get(nameInLoadedFile);
-    // TODO(bazel-team): Unify data structures between Skylark and BUILD,
-    // and stop doing the conversions below:
-    if (!isSkylark) {
-      value = SkylarkType.convertFromSkylark(value);
-    }
 
     try {
       update(symbol.getName(), value);
     } catch (EvalException e) {
-      throw new LoadFailedException(extension);
+      throw new LoadFailedException(importString);
     }
   }
 
@@ -845,9 +799,9 @@ public final class Environment implements Freezable {
     // Calculate a new hash from the hash of the loaded Extension-s.
     Fingerprint fingerprint = new Fingerprint();
     fingerprint.addString(Preconditions.checkNotNull(fileContentHashCode));
-    TreeSet<PathFragment> paths = new TreeSet<>(importedExtensions.keySet());
-    for (PathFragment path : paths) {
-      fingerprint.addString(importedExtensions.get(path).getTransitiveContentHashCode());
+    TreeSet<String> importStrings = new TreeSet<>(importedExtensions.keySet());
+    for (String importString : importStrings) {
+      fingerprint.addString(importedExtensions.get(importString).getTransitiveContentHashCode());
     }
     return fingerprint.hexDigestAndReset();
   }
@@ -900,45 +854,16 @@ public final class Environment implements Freezable {
       }
     };
 
-  /** Mock package locator class */
-  private static final class EmptyPackageLocator implements CachingPackageLocator {
-    @Override
-    public Path getBuildFileForPackage(PackageIdentifier packageName) {
-      return null;
-    }
-  }
-
-  /** A mock package locator */
-  @VisibleForTesting
-  static final CachingPackageLocator EMPTY_PACKAGE_LOCATOR = new EmptyPackageLocator();
-
-  /**
-   * Creates a Lexer without a supporting file.
-   * @param input a list of lines of code
-   */
-  @VisibleForTesting
-  Lexer createLexer(String... input) {
-    return new Lexer(ParserInputSource.create(Joiner.on("\n").join(input), null),
-        eventHandler);
-  }
-
   /**
    * Parses some String input without a supporting file, returning statements and comments.
    * @param input a list of lines of code
    */
   @VisibleForTesting
-  Parser.ParseResult parseFileWithComments(String... input) {
+  Parser.ParseResult parseFileWithComments(String... inputLines) {
+    ParserInputSource input = ParserInputSource.create(Joiner.on("\n").join(inputLines), null);
     return isSkylark
-        ? Parser.parseFileForSkylark(
-            createLexer(input),
-            eventHandler,
-            EMPTY_PACKAGE_LOCATOR,
-            new ValidationEnvironment(this))
-        : Parser.parseFile(
-              createLexer(input),
-              eventHandler,
-              EMPTY_PACKAGE_LOCATOR,
-              /*parsePython=*/false);
+        ? Parser.parseFileForSkylark(input, eventHandler, new ValidationEnvironment(this))
+        : Parser.parseFile(input, eventHandler, /*parsePython=*/false);
   }
 
   /**
@@ -946,7 +871,7 @@ public final class Environment implements Freezable {
    * @param input a list of lines of code
    */
   @VisibleForTesting
-  List<Statement> parseFile(String... input) {
+  public List<Statement> parseFile(String... input) {
     return parseFileWithComments(input).statements;
   }
 

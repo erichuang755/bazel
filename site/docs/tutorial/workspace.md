@@ -1,3 +1,8 @@
+---
+layout: documentation
+title: Tutorial - Set Up a Workspace
+---
+
 # Tutorial - Set Up a Workspace
 
 A [workspace](/docs/build-ref.html#workspaces) is a directory that contains the
@@ -20,7 +25,7 @@ For your convenience, set the `$WORKSPACE` environment variable now to refer to
 your workspace directory. At the command line, enter:
 
 ```bash
-$ export $WORKSPACE=$HOME/examples/tutorial
+$ export WORKSPACE=$HOME/examples/tutorial
 ```
 
 ## Create a WORKSPACE file

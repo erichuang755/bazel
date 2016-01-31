@@ -1,11 +1,7 @@
-<!DOCTYPE html>
-
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>Bazel Test Encyclopedia</title>
-
-<body>
+---
+layout: documentation
+title: Test Encyclopedia
+---
 <h1>Bazel Test Encyclopedia</h1>
 <p class="lead">An Exhaustive Specification of the Test Execution Environment</p>
 
@@ -161,7 +157,7 @@ flakiness.</p>
 tests whose specified size is too big.</p>
 
 <p>Test sizes and timeouts are specified in the BUILD file according to the specification
-<a href="build-encyclopedia.html#test">here</a>.
+<a href="be/common-definitions.html#common-attributes-tests">here</a>.
 Any test that does not specify a recognized size will default to being a medium
 test.</p>
 
@@ -221,7 +217,8 @@ test unless the user explicitly requests it.</p>
 
     </td><td>optional</td></tr>
     <tr><td><code>TEST_WARNINGS_OUTPUT_FILE</code></td><td>absolute path to a private file in a writable directory (used to write test target warnings)</td><td>optional</td></tr>
-    <tr><td><code>TZ</code></td><td><code>US/Pacific</code></td><td>required</td></tr>
+
+    <tr><td><code>TZ</code></td><td><code>UTC</code></td><td>required</td></tr>
 
     <tr><td><code>USER</code></td><td>value of <code>getpwuid(getuid())-&gt;pw_name</code></td><td>required</td></tr>
 
@@ -374,7 +371,7 @@ Tests should avoid using paths containing <code>..</code> components within the
 runfiles tree.</p>
 
 <p>No directory, file, or symlink within the runfiles tree (including paths
-which traverse symlinks) should be writable. (It follow that the initial
+which traverse symlinks) should be writable. (It follows that the initial
 working directory should not be writable.) Tests must not assume that any part
 of the runfiles is writable, or owned by the current user (i.e. chmod and chgrp
 may fail).</p>
@@ -420,7 +417,7 @@ prematurely and mark it as having failed.</p>
     <tr>
       <th><code>manual</code></th>
 
-      <td>run test only if mentioned explicitly (not in a wildcard <code>:...</code>, <code>:*</code>, or <code>:all</code>)</td>
+      <td>don't include test target in wildcard target patterns like <code>:...</code>, <code>:*</code>, or <code>:all</code>)</td>
     </tr>
     <tr>
       <th><code>medium</code></th>
@@ -446,6 +443,3 @@ prematurely and mark it as having failed.</p>
   </tbody>
 </table>
 
-</body>
-
-</html>

@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -81,9 +81,9 @@ public class TerminalTestResultNotifier implements TestResultNotifier {
    * Prints a test result summary that contains only failed tests.
    */
   private void printDetailedTestResultSummary(Set<TestSummary> summaries) {
-    for (TestSummary entry : summaries) {
-      if (entry.getStatus() != BlazeTestStatus.PASSED) {
-        TestSummaryPrinter.print(entry, printer, summaryOptions.verboseSummary, true);
+    for (TestSummary summary : summaries) {
+      if (summary.getStatus() != BlazeTestStatus.PASSED) {
+        TestSummaryPrinter.print(summary, printer, summaryOptions.verboseSummary, true);
       }
     }
   }
@@ -92,9 +92,9 @@ public class TerminalTestResultNotifier implements TestResultNotifier {
    * Prints a full test result summary.
    */
   private void printShortSummary(Set<TestSummary> summaries, boolean showPassingTests) {
-    for (TestSummary entry : summaries) {
-      if (entry.getStatus() != BlazeTestStatus.PASSED || showPassingTests) {
-        TestSummaryPrinter.print(entry, printer, summaryOptions.verboseSummary, false);
+    for (TestSummary summary : summaries) {
+      if (summary.getStatus() != BlazeTestStatus.PASSED || showPassingTests) {
+        TestSummaryPrinter.print(summary, printer, summaryOptions.verboseSummary, false);
       }
     }
   }

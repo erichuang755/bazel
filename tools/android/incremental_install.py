@@ -1,4 +1,4 @@
-# Copyright 2015 Google Inc. All rights reserved.
+# Copyright 2015 The Bazel Authors. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -106,6 +106,10 @@ class TimestampException(Exception):
   """Raised when there is a problem with timestamp reading/writing."""
 
 
+class OldSdkException(Exception):
+  """Raised when the SDK on the target device is older than the app allows."""
+
+
 class Adb(object):
   """A class to handle interaction with adb."""
 
@@ -156,6 +160,8 @@ class Adb(object):
       # "error: " to the beginning, so take it off so that we don't end up
       # printing "Error: error: ..."
       raise MultipleDevicesError(re.sub("^error: ", "", stderr))
+    elif "INSTALL_FAILED_OLDER_SDK" in stdout:
+      raise OldSdkException()
 
     if adb.returncode != 0:
       raise AdbError(args, adb.returncode, stdout, stderr)
@@ -178,10 +184,7 @@ class Adb(object):
     if match:
       return match.group(1)
     else:
-      raise TimestampException(
-          "Package '%s' is not installed on the device. At least one "
-          "non-incremental 'mobile-install' must precede incremental "
-          "installs." % package)
+      return None
 
   def GetAbi(self):
     """Returns the ABI the device supports."""
@@ -222,7 +225,7 @@ class Adb(object):
     pkg_args = ["-p", pkg] if pkg else []
     ret, stdout, stderr, args = self._Exec(
         ["install-multiple", "-r"] + pkg_args + [apk])
-    if "Success" not in stderr and "Success" not in stdout:
+    if "FAILED" in stdout or "FAILED" in stderr:
       raise AdbError(args, ret, stdout, stderr)
 
   def Install(self, apk):
@@ -237,7 +240,7 @@ class Adb(object):
     # and yet it will still have a return code of 0. At least for the install
     # command, it will print "Success" if it succeeded, so check for that in
     # standard out instead of relying on the return code.
-    if "Success" not in stderr and "Success" not in stdout:
+    if "FAILED" in stdout or "FAILED" in stderr:
       raise AdbError(args, ret, stdout, stderr)
 
   def Uninstall(self, pkg):
@@ -586,6 +589,12 @@ def VerifyInstallTimestamp(adb, app_package):
         "'mobile-install' must precede incremental installs")
 
   actual_timestamp = adb.GetInstallTime(app_package)
+  if actual_timestamp is None:
+    raise TimestampException(
+        "Package '%s' is not installed on the device. At least one "
+        "non-incremental 'mobile-install' must precede incremental "
+        "installs." % app_package)
+
   if actual_timestamp != expected_timestamp:
     raise TimestampException("Installed app '%s' has an unexpected timestamp. "
                              "Did you last install the app in a way other than "
@@ -707,7 +716,6 @@ def IncrementalInstall(adb_path, execroot, stub_datafile, output_marker,
             adb.GetInstallTime(app_package),
             "%s/%s/install_timestamp" % (DEVICE_DIRECTORY, app_package))
         future.result()
-
       else:
         if start_type == "warm":
           adb.StopAppAndSaveState(app_package)
@@ -726,9 +734,12 @@ def IncrementalInstall(adb_path, execroot, stub_datafile, output_marker,
     sys.exit("Error: Device unauthorized. Please check the confirmation "
              "dialog on your device.")
   except MultipleDevicesError as e:
-    sys.exit(
-        "Error: " + e.message + "\nTry specifying a device serial with " +
-        "\"blaze mobile-install --adb_arg=-s --adb_arg=$ANDROID_SERIAL\"")
+    sys.exit("Error: " + e.message + "\nTry specifying a device serial with "
+             "\"blaze mobile-install --adb_arg=-s --adb_arg=$ANDROID_SERIAL\"")
+  except OldSdkException as e:
+    sys.exit("Error: The device does not support the API level specified in "
+             "the application's manifest. Check minSdkVersion in "
+             "AndroidManifest.xml")
   except TimestampException as e:
     sys.exit("Error:\n%s" % e.message)
   except AdbError as e:

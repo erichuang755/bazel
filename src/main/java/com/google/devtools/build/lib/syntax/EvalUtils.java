@@ -1,4 +1,4 @@
-// Copyright 2014 Google Inc. All rights reserved.
+// Copyright 2014 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,18 +14,23 @@
 package com.google.devtools.build.lib.syntax;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Ordering;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.events.Location;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkValue;
+import com.google.devtools.build.lib.syntax.SkylarkList.Tuple;
+import com.google.devtools.build.lib.syntax.compiler.ByteCodeUtils;
+import com.google.devtools.build.lib.util.Preconditions;
+import com.google.devtools.build.lib.vfs.PathFragment;
+
+import net.bytebuddy.implementation.bytecode.StackManipulation;
 
 import java.util.Collection;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -33,7 +38,9 @@ import java.util.Set;
 /**
  * Utilities used by the evaluator.
  */
-public abstract class EvalUtils {
+public final class EvalUtils {
+
+  private EvalUtils() {}
 
   /**
    * The exception that SKYLARK_COMPARATOR might throw. This is an unchecked exception
@@ -52,7 +59,7 @@ public abstract class EvalUtils {
    * <p> It may throw an unchecked exception ComparisonException that should be wrapped in
    * an EvalException.
    */
-  public static final Comparator<Object> SKYLARK_COMPARATOR = new Comparator<Object>() {
+  public static final Ordering<Object> SKYLARK_COMPARATOR = new Ordering<Object>() {
     private int compareLists(SkylarkList o1, SkylarkList o2) {
       for (int i = 0; i < Math.min(o1.size(), o2.size()); i++) {
         int cmp = compare(o1.get(i), o2.get(i));
@@ -66,15 +73,11 @@ public abstract class EvalUtils {
     @Override
     @SuppressWarnings("unchecked")
     public int compare(Object o1, Object o2) {
-      Location loc = null;
-      try {
-        o1 = SkylarkType.convertToSkylark(o1, loc);
-        o2 = SkylarkType.convertToSkylark(o2, loc);
-      } catch (EvalException e) {
-        throw new ComparisonException(e.getMessage());
-      }
+      o1 = SkylarkType.convertToSkylark(o1, /*env=*/ null);
+      o2 = SkylarkType.convertToSkylark(o2, /*env=*/ null);
 
-      if (o1 instanceof SkylarkList && o2 instanceof SkylarkList) {
+      if (o1 instanceof SkylarkList && o2 instanceof SkylarkList
+          && ((SkylarkList) o1).isTuple() == ((SkylarkList) o2).isTuple()) {
         return compareLists((SkylarkList) o1, (SkylarkList) o2);
       }
       try {
@@ -91,71 +94,75 @@ public abstract class EvalUtils {
     }
   };
 
-  // TODO(bazel-team): Yet an other hack committed in the name of Skylark. One problem is that the
-  // syntax package cannot depend on actions so we have to have this until Actions are immutable.
-  // The other is that BuildConfigurations are technically not immutable but they cannot be modified
-  // from Skylark.
-  private static final ImmutableSet<Class<?>> quasiImmutableClasses;
-  static {
-    try {
-      ImmutableSet.Builder<Class<?>> builder = ImmutableSet.builder();
-      builder.add(Class.forName("com.google.devtools.build.lib.actions.Action"));
-      builder.add(Class.forName("com.google.devtools.build.lib.analysis.config.BuildConfiguration"));
-      builder.add(Class.forName("com.google.devtools.build.lib.actions.Root"));
-      quasiImmutableClasses = builder.build();
-    } catch (ClassNotFoundException e) {
-      throw new RuntimeException(e);
+  public static final StackManipulation checkValidDictKey =
+      ByteCodeUtils.invoke(EvalUtils.class, "checkValidDictKey", Object.class);
+
+  /**
+   * Checks that an Object is a valid key for a Skylark dict.
+   * @param o an Object to validate
+   * @throws EvalException if o is not a valid key
+   */
+  public static void checkValidDictKey(Object o) throws EvalException {
+    // TODO(bazel-team): check that all recursive elements are both Immutable AND Comparable.
+    if (isImmutable(o)) {
+      return;
     }
-  }
-
-  private EvalUtils() {
-  }
-
-  /**
-   * @return true if the specified sequence is a tuple; false if it's a modifiable list.
-   */
-  public static boolean isTuple(List<?> l) {
-    return isTuple(l.getClass());
-  }
-
-  public static boolean isTuple(Class<?> c) {
-    Preconditions.checkState(List.class.isAssignableFrom(c));
-    return ImmutableList.class.isAssignableFrom(c);
+    // Same error message as Python (that makes it a TypeError).
+    throw new EvalException(null, Printer.format("unhashable type: '%r'", o.getClass()));
   }
 
   /**
-   * @return true if the specified value is immutable (suitable for use as a
-   *         dictionary key) according to the rules of the Build language.
+   * Is this object known or assumed to be recursively immutable by Skylark?
+   * @param o an Object
+   * @return true if the object is known to be an immutable value.
    */
+  // NB: This is used as the basis for accepting objects in SkylarkNestedSet-s,
+  // as well as for accepting objects as keys for Skylark dict-s.
   public static boolean isImmutable(Object o) {
-    if (o instanceof Map<?, ?> || o instanceof BaseFunction
-        || o instanceof FilesetEntry || o instanceof GlobList<?>) {
-      return false;
-    } else if (o instanceof List<?>) {
-      return isTuple((List<?>) o); // tuples are immutable, lists are not.
-    } else {
-      return true; // string/int
-    }
-  }
-
-  /**
-   * Returns true if the type is immutable in the skylark language.
-   */
-  public static boolean isSkylarkImmutable(Class<?> c) {
-    if (c.isAnnotationPresent(Immutable.class)) {
-      return true;
-    } else if (c.equals(String.class) || c.equals(Integer.class) || c.equals(Boolean.class)
-        || SkylarkList.class.isAssignableFrom(c) || ImmutableMap.class.isAssignableFrom(c)
-        || NestedSet.class.isAssignableFrom(c)) {
-      return true;
-    } else {
-      for (Class<?> classObject : quasiImmutableClasses) {
-        if (classObject.isAssignableFrom(c)) {
-          return true;
+    if (o instanceof Tuple) {
+      for (Object item : (Tuple) o) {
+        if (!isImmutable(item)) {
+          return false;
         }
       }
+      return true;
     }
-    return false;
+    if (o instanceof SkylarkMutable) {
+      return false;
+    }
+    if (o instanceof SkylarkValue) {
+      return ((SkylarkValue) o).isImmutable();
+    }
+    return isImmutable(o.getClass());
+  }
+
+  /**
+   * Is this class known to be *recursively* immutable by Skylark?
+   * For instance, class Tuple is not it, because it can contain mutable values.
+   * @param c a Class
+   * @return true if the class is known to represent only recursively immutable values.
+   */
+  // NB: This is used as the basis for accepting objects in SkylarkNestedSet-s,
+  // as well as for accepting objects as keys for Skylark dict-s.
+  static boolean isImmutable(Class<?> c) {
+    return c.isAnnotationPresent(Immutable.class) // TODO(bazel-team): beware of containers!
+        || c.equals(String.class)
+        || c.equals(Integer.class)
+        || c.equals(Boolean.class);
+  }
+
+  /**
+   * Returns true if the type is acceptable to be returned to the Skylark language.
+   */
+  public static boolean isSkylarkAcceptable(Class<?> c) {
+    return SkylarkValue.class.isAssignableFrom(c) // implements SkylarkValue
+        || c.equals(String.class) // basic values
+        || c.equals(Integer.class)
+        || c.equals(Boolean.class)
+        || c.isAnnotationPresent(SkylarkModule.class) // registered Skylark class
+        || ImmutableMap.class.isAssignableFrom(c) // will be converted to SkylarkDict
+        || NestedSet.class.isAssignableFrom(c) // will be converted to SkylarkNestedSet
+        || c.equals(PathFragment.class); // other known class
   }
 
   /**
@@ -198,12 +205,12 @@ public abstract class EvalUtils {
    * @return a super-class of c to be used in validation-time type inference.
    */
   public static Class<?> getSkylarkType(Class<?> c) {
-    if (ImmutableList.class.isAssignableFrom(c)) {
+    if (SkylarkList.class.isAssignableFrom(c)) {
+      return c;
+    } else if (ImmutableList.class.isAssignableFrom(c)) {
       return ImmutableList.class;
     } else if (List.class.isAssignableFrom(c)) {
       return List.class;
-    } else if (SkylarkList.class.isAssignableFrom(c)) {
-      return SkylarkList.class;
     } else if (Map.class.isAssignableFrom(c)) {
       return Map.class;
     } else if (NestedSet.class.isAssignableFrom(c)) {
@@ -236,21 +243,19 @@ public abstract class EvalUtils {
    * Returns a pretty name for the datatype of object {@code object} in Skylark
    * or the BUILD language, with full details if the {@code full} boolean is true.
    */
-  public static String getDataTypeName(Object object, boolean full) {
+  public static String getDataTypeName(Object object, boolean fullDetails) {
     Preconditions.checkNotNull(object);
-    if (object instanceof SkylarkList) {
-      SkylarkList list = (SkylarkList) object;
-      if (list.isTuple()) {
-        return "tuple";
-      } else {
-        return "list" + (full ? " of " + list.getContentType() + "s" : "");
+    if (fullDetails) {
+      if (object instanceof SkylarkNestedSet) {
+        SkylarkNestedSet set = (SkylarkNestedSet) object;
+        return "set of " + set.getContentType() + "s";
       }
-    } else if (object instanceof SkylarkNestedSet) {
-      SkylarkNestedSet set = (SkylarkNestedSet) object;
-      return "set" + (full ? " of " + set.getContentType() + "s" : "");
-    } else {
-      return getDataTypeNameFromClass(object.getClass());
+      if (object instanceof SelectorList) {
+        SelectorList list = (SelectorList) object;
+        return "select of " + getDataTypeNameFromClass(list.getType());
+      }
     }
+    return getDataTypeNameFromClass(object.getClass());
   }
 
   /**
@@ -266,7 +271,11 @@ public abstract class EvalUtils {
    * when the given class identifies a Skylark name space.
    */
   public static String getDataTypeNameFromClass(Class<?> c, boolean highlightNameSpaces) {
-    if (c.equals(Object.class)) {
+    if (c.isAnnotationPresent(SkylarkModule.class)) {
+      SkylarkModule module = c.getAnnotation(SkylarkModule.class);
+      return c.getAnnotation(SkylarkModule.class).name()
+          + ((module.namespace() && highlightNameSpaces) ? " (a language module)" : "");
+    } else if (c.equals(Object.class)) {
       return "unknown";
     } else if (c.equals(String.class)) {
       return "string";
@@ -274,22 +283,10 @@ public abstract class EvalUtils {
       return "int";
     } else if (c.equals(Boolean.class)) {
       return "bool";
-    } else if (c.equals(Void.TYPE) || c.equals(Runtime.NoneType.class)) {
-      // TODO(bazel-team): no one should be seeing Void at all.
-      return "NoneType";
-    } else if (List.class.isAssignableFrom(c)) {
-      // NB: the capital here is a subtle way to distinguish java Tuple and java List
-      // from native SkylarkList tuple and list.
-      // TODO(bazel-team): refactor SkylarkList and use it everywhere.
-      return isTuple(c) ? "Tuple" : "List";
-    } else if (GlobList.class.isAssignableFrom(c)) {
-      return "glob list";
     } else if (Map.class.isAssignableFrom(c)) {
       return "dict";
     } else if (BaseFunction.class.isAssignableFrom(c)) {
       return "function";
-    } else if (c.equals(FilesetEntry.class)) {
-      return "FilesetEntry";
     } else if (c.equals(SelectorValue.class)) {
       return "select";
     } else if (NestedSet.class.isAssignableFrom(c) || SkylarkNestedSet.class.isAssignableFrom(c)) {
@@ -297,13 +294,6 @@ public abstract class EvalUtils {
       return "set";
     } else if (ClassObject.SkylarkClassObject.class.isAssignableFrom(c)) {
       return "struct";
-    } else if (SkylarkList.class.isAssignableFrom(c)) {
-      // TODO(bazel-team): Refactor the class hierarchy so we can distinguish list and tuple types.
-      return "list";
-    } else if (c.isAnnotationPresent(SkylarkModule.class)) {
-      SkylarkModule module = c.getAnnotation(SkylarkModule.class);
-      return c.getAnnotation(SkylarkModule.class).name()
-          + ((module.namespace() && highlightNameSpaces) ? " (a language module)" : "");
     } else {
       if (c.getSimpleName().isEmpty()) {
         return c.getName();
@@ -311,13 +301,6 @@ public abstract class EvalUtils {
         return c.getSimpleName();
       }
     }
-  }
-
-  /**
-   * Returns a sequence of the appropriate list/tuple datatype for 'seq', based on 'isTuple'.
-   */
-  public static List<?> makeSequence(List<?> seq, boolean isTuple) {
-    return isTuple ? ImmutableList.copyOf(seq) : seq;
   }
 
   public static Object checkNotNull(Expression expr, Object obj) throws EvalException {
@@ -328,6 +311,9 @@ public abstract class EvalUtils {
     }
     return obj;
   }
+
+  public static final StackManipulation toBoolean =
+      ByteCodeUtils.invoke(EvalUtils.class, "toBoolean", Object.class);
 
   /**
    * @return the truth value of an object, according to Python rules.
@@ -357,18 +343,19 @@ public abstract class EvalUtils {
     }
   }
 
-  @SuppressWarnings("unchecked")
+  public static final StackManipulation toCollection =
+      ByteCodeUtils.invoke(EvalUtils.class, "toCollection", Object.class, Location.class);
+
   public static Collection<?> toCollection(Object o, Location loc) throws EvalException {
     if (o instanceof Collection) {
-      return (Collection<Object>) o;
+      return (Collection<?>) o;
     } else if (o instanceof SkylarkList) {
-      return ((SkylarkList) o).toList();
-    } else if (o instanceof Map<?, ?>) {
-      Map<Comparable<?>, Object> dict = (Map<Comparable<?>, Object>) o;
+      return ((SkylarkList) o).getImmutableList();
+    } else if (o instanceof Map) {
       // For dictionaries we iterate through the keys only
       // For determinism, we sort the keys.
       try {
-        return Ordering.from(SKYLARK_COMPARATOR).sortedCopy(dict.keySet());
+        return SKYLARK_COMPARATOR.sortedCopy(((Map<?, ?>) o).keySet());
       } catch (ComparisonException e) {
         throw new EvalException(loc, e);
       }
@@ -380,22 +367,30 @@ public abstract class EvalUtils {
     }
   }
 
-  @SuppressWarnings("unchecked")
+  public static final StackManipulation toIterable =
+      ByteCodeUtils.invoke(EvalUtils.class, "toIterable", Object.class, Location.class);
+
   public static Iterable<?> toIterable(Object o, Location loc) throws EvalException {
     if (o instanceof String) {
       // This is not as efficient as special casing String in for and dict and list comprehension
       // statements. However this is a more unified way.
-      // The regex matches every character in the string until the end of the string,
-      // so "abc" will be split into ["a", "b", "c"].
-      return ImmutableList.<Object>copyOf(((String) o).split("(?!^)"));
+      return split((String) o);
     } else if (o instanceof Iterable) {
-      return (Iterable<Object>) o;
-    } else if (o instanceof Map<?, ?>) {
+      return (Iterable<?>) o;
+    } else if (o instanceof Map) {
       return toCollection(o, loc);
     } else {
       throw new EvalException(loc,
           "type '" + getDataTypeName(o) + "' is not iterable");
     }
+  }
+
+  private static ImmutableList<String> split(String value) {
+    ImmutableList.Builder<String> builder = new ImmutableList.Builder<>();
+    for (char c : value.toCharArray()) {
+      builder.add(String.valueOf(c));
+    }
+    return builder.build();
   }
 
   /**
@@ -424,7 +419,7 @@ public abstract class EvalUtils {
    * Build a map of kwarg arguments from a list, removing null-s or None-s.
    *
    * @param init a series of key, value pairs (as consecutive arguments)
-   *   as in {@code optionMap(k1, v1, k2, v2, k3, v3, map)}
+   *   as in {@code optionMap(k1, v1, k2, v2, k3, v3)}
    *   where each key is a String, each value is an arbitrary Objet.
    * @return a {@code Map<String, Object>} that has all the specified entries,
    *   where key, value pairs appearing earlier have precedence,
